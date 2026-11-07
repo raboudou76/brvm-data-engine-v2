@@ -5,8 +5,8 @@ import streamlit as st
 from data_engine import connect,records,stage,approve,parse_csv,coverage
 from structured_financials import extract_structured
 
-st.set_page_config(page_title='BRVM Data Engine V2.0',layout='wide')
-st.title('BRVM RADAR — Data Engine V2.0')
+st.set_page_config(page_title='BRVM Data Engine V2.1',layout='wide')
+st.title('BRVM RADAR — Data Engine V2.1')
 st.caption('Pilote indépendant : stockage, provenance et validation humaine des données financières')
 try: db=connect()
 except Exception as exc: st.error(f'Base indisponible : {exc}');st.stop()
@@ -15,7 +15,7 @@ symbols=['SMBC','SGBC','BOAB','CBIBF']
 for r in db.execute('SELECT DISTINCT symbol FROM financials'):
     if r['symbol'] not in symbols:symbols.append(r['symbol'])
 selected=st.selectbox('Société',symbols)
-tabs=st.tabs(['Historique vérifié','Importer les rapports','Validation','Contrôle qualité'])
+tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Importer les rapports','Validation','Contrôle qualité'])
 with tabs[0]:
     rs=records(db,selected,True)
     if not rs: st.info('Aucune donnée encore vérifiée pour cette société.')
@@ -35,6 +35,27 @@ with tabs[0]:
             st.subheader(f'Croissance {base} (%)')
             st.dataframe(growth.dropna().rename('Croissance %').reset_index(),hide_index=True)
 with tabs[1]:
+    st.subheader('Synchroniser les publications officielles BRVM')
+    st.caption('Les données sont téléchargées et placées en attente de validation. Aucune valeur n’est automatiquement certifiée.')
+    max_reports=st.slider('Nombre maximum de rapports PDF à analyser',1,12,6)
+    financial_pages=st.slider('Pages de publications financières à explorer',1,8,5)
+    dividend_pages=st.slider('Pages d’annonces de dividendes à explorer',1,30,12)
+    if st.button('Synchroniser les données BRVM',type='primary'):
+        from brvm_live_sync import synchronize
+        with st.spinner('Recherche et analyse des publications BRVM en cours…'):
+            try:
+                result=synchronize(db,selected,max_reports,financial_pages,dividend_pages)
+                st.session_state[f'sync-{selected}']=result
+            except Exception as exc:st.error(f'Synchronisation impossible : {type(exc).__name__}: {exc}')
+    result=st.session_state.get(f'sync-{selected}')
+    if result:
+        cols=st.columns(4)
+        for c,label,key in zip(cols,['Rapports repérés','PDF lus','Valeurs financières extraites','Valeurs mises en attente'],['reports_found','pdf_read','financial_rows','staged']):c.metric(label,result[key])
+        st.caption(f"Dividendes extraits : {result['dividend_rows']} · PDF en échec : {result['pdf_failed']}")
+        if result['report_details']:st.dataframe(pd.DataFrame(result['report_details']),hide_index=True,use_container_width=True)
+        for error in result['errors']:st.warning(error)
+        st.info('Consulte l’onglet Validation pour vérifier les valeurs, puis Historique vérifié pour afficher les histogrammes.')
+with tabs[2]:
     st.write('Import CSV de valeurs vérifiées dans les publications, ou pré-extraction d’un PDF natif. Toute valeur importée reste en attente de validation.')
     st.download_button('Télécharger le modèle CSV',open(os.path.join(os.path.dirname(__file__),'modele_import.csv'),'rb').read(),'modele_import.csv')
     csvfile=st.file_uploader('Importer un CSV',type='csv',key='csv')
@@ -63,7 +84,7 @@ with tabs[1]:
         n,errors=stage(db,st.session_state['pdf_rows'])
         st.success(f'{n} lignes en attente de validation')
         for err in errors:st.warning(err)
-with tabs[2]:
+with tabs[3]:
     pending=[r for r in records(db,selected) if r['status']=='a_verifier']
     if not pending:st.info('Aucune valeur en attente pour ce titre.')
     for r in pending:
@@ -72,7 +93,7 @@ with tabs[2]:
             st.warning('Comparer avec le PDF officiel avant de valider.')
             if st.button('J’ai vérifié cette valeur dans la source',key=f"ok-{r['symbol']}-{r['year']}-{r['metric']}"):
                 approve(db,r['symbol'],r['year'],r['metric']);st.rerun()
-with tabs[3]:
+with tabs[4]:
     st.dataframe(pd.DataFrame(coverage(db,symbols)),hide_index=True,use_container_width=True)
     st.caption('La couverture mesure uniquement les valeurs validées. Une valeur absente n’est jamais assimilée à zéro.')
     st.download_button('Exporter les données vérifiées',pd.DataFrame(records(db,verified_only=True)).to_csv(index=False).encode('utf-8-sig'),'brvm_financials_verified.csv','text/csv')
