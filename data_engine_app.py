@@ -146,6 +146,31 @@ with tabs[3]:
                         st.download_button('Exporter audit des colonnes CSV',pd.DataFrame(table_rows).to_csv(index=False).encode('utf-8-sig'),f'audit_colonnes_{selected}.csv','text/csv')
                     else:st.warning('Aucun montant exploitable détecté. Vérification manuelle requise.')
                     st.warning('Ne pas utiliser les montants dans le Dashboard, T1/S1/T3 ou Valorisation sans vérification des colonnes, unités et comptes individuels/consolidés.')
+                st.divider()
+                st.markdown('#### V2.4.3 — Reconstruction universelle des tableaux (expérimentale)')
+                st.caption('Reconnaissance des libellés et géométrie des colonnes, sans obligation de codes comptables. Aucun enregistrement ni certification.')
+                if st.button('Reconstruire les tableaux par OCR',key=f'v243-{selected}'):
+                    try:
+                        from brvm_universal_tables import reconstruct
+                        with st.spinner('Reconstruction des tableaux financiers…'):
+                            raw3=download_pdf(source['URL'])
+                            universal_rows,universal_diag=reconstruct(raw3,source['Titre'],max_pages=ocr_pages)
+                            st.session_state[f'v243-table-{selected}']=(source['URL'],universal_rows,universal_diag)
+                    except Exception as exc:st.error(f'Analyse V2.4.3 : {type(exc).__name__}: {exc}')
+                universal_result=st.session_state.get(f'v243-table-{selected}')
+                if universal_result and universal_result[0]==source['URL']:
+                    _,universal_rows,universal_diag=universal_result
+                    u1,u2,u3=st.columns(3)
+                    u1.metric('Montants candidats',universal_diag['rows'])
+                    u2.metric('Années proposées',universal_diag['assigned'])
+                    u3.metric('Sans attribution',universal_diag['unassigned'])
+                    for err in universal_diag['errors']:st.error(err)
+                    st.caption(f"Pages OCR : {universal_diag['pages_ocr']} · En-têtes détectés : {universal_diag['headers_found']}")
+                    if universal_rows:
+                        st.dataframe(pd.DataFrame(universal_rows),hide_index=True,use_container_width=True)
+                        st.download_button('Exporter audit universel CSV',pd.DataFrame(universal_rows).to_csv(index=False).encode('utf-8-sig'),f'audit_universel_{selected}.csv','text/csv')
+                    else:st.warning('Aucun montant candidat reconstitué. Consulter le PDF original.')
+                    st.warning('Toutes les attributions sont provisoires et non certifiées. Aucune valeur ne doit alimenter les calculs financiers avant validation.')
 with tabs[4]:
     st.write('Import CSV de valeurs vérifiées dans les publications, ou pré-extraction d’un PDF natif. Toute valeur importée reste en attente de validation.')
     st.download_button('Télécharger le modèle CSV',open(os.path.join(os.path.dirname(__file__),'modele_import.csv'),'rb').read(),'modele_import.csv')
