@@ -15,7 +15,7 @@ symbols=['SMBC','SGBC','BOAB','CBIBF']
 for r in db.execute('SELECT DISTINCT symbol FROM financials'):
     if r['symbol'] not in symbols:symbols.append(r['symbol'])
 selected=st.selectbox('Société',symbols)
-tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4.1','Importer les rapports','Validation','Contrôle qualité','Pipeline V2.5.0','Extraction hybride V2.5.1','Réconciliation V2.5.2','Consolidation V2.5.3','Validation structurelle V2.5.4','En-têtes et unités V2.5.5','Alignement V2.5.6','Grille comptable V2.5.7'])
+tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4.1','Importer les rapports','Validation','Contrôle qualité','Pipeline V2.5.0','Extraction hybride V2.5.1','Réconciliation V2.5.2','Consolidation V2.5.3','Validation structurelle V2.5.4','En-têtes et unités V2.5.5','Alignement V2.5.6','Grille comptable V2.5.7','Finance intégrée V2.6.0'])
 with tabs[0]:
     rs=records(db,selected,True)
     if not rs: st.info('Aucune donnée encore vérifiée pour cette société.')
@@ -545,3 +545,34 @@ with tabs[14]:
                 st.download_button('Exporter audit V2.5.7 CSV',df.to_csv(index=False).encode('utf-8-sig'),f'audit_v257_{selected}.csv','text/csv',key='v257_export')
                 st.warning('Les exercices sont des propositions vérifiables ; aucun montant n’est certifié ni synchronisé avec BRVM RADAR.')
         else:st.info('Aucun document archivé pour cette société.')
+
+with tabs[15]:
+    st.subheader('V2.6.0 — Base financière et analyses provisoires')
+    st.caption('Import des audits V2.5.x, stockage local SQLite, historique et croissance. Aucune certification ni synchronisation automatique.')
+    from brvm_v260_finance import connect_db, import_csv, observations, indicators, ALLOWED
+    if selected not in ALLOWED:
+        st.info('Pilote limité à BOAB, SMBC, SNTS, SGBC et CBIBF.')
+    else:
+        st.warning('Sur Streamlit Community Cloud, le stockage SQLite local peut être effacé au redémarrage. Exporter les données ; PostgreSQL sera nécessaire pour la production.')
+        db260=connect_db()
+        csv260=st.file_uploader('Importer un audit CSV V2.5.x',type=['csv'],key='v260_csv')
+        xof260=st.checkbox('Devise XOF déduite du contexte UEMOA',value=True,key='v260_xof')
+        scale260=st.checkbox('Montants entiers présumés (facteur ×1 si aucune unité explicite)',value=True,key='v260_scale')
+        if st.button('Importer dans la base provisoire',key='v260_import',disabled=csv260 is None):
+            try:st.session_state['v260_stats']=import_csv(db260,csv260.getvalue(),selected,xof260,scale260)
+            except Exception as exc:st.error(f'Import impossible : {exc}')
+        if 'v260_stats' in st.session_state:st.json(st.session_state['v260_stats'])
+        rows260=observations(db260,selected)
+        a260,b260,c260=st.columns(3)
+        a260.metric('Observations',len(rows260))
+        b260.metric('Provisoires',sum(r['review_status']=='PROVISOIRE' for r in rows260))
+        c260.metric('Bloquées',sum(r['review_status']=='BLOQUE' for r in rows260))
+        if rows260:
+            df260=pd.DataFrame(rows260)
+            st.dataframe(df260[['indicator','fiscal_year','raw_amount','amount_xof','currency_basis','scale_basis','review_status','issue','source_page']],use_container_width=True,hide_index=True)
+            st.download_button('Exporter observations V2.6.0 CSV',df260.to_csv(index=False).encode('utf-8-sig'),f'observations_v260_{selected}.csv','text/csv',key='v260_export')
+        analytics260=indicators(db260,selected)
+        if analytics260:
+            st.subheader('Indicateurs annuels — provisoires')
+            st.dataframe(pd.DataFrame(analytics260),hide_index=True,use_container_width=True)
+        st.info('Les valeurs sans exercice attribué sont bloquées. Les ratios nécessitant des données absentes (BPA, PER, dividendes, valorisation) ne sont pas calculés.')
