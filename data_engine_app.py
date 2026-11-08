@@ -79,7 +79,7 @@ with tabs[2]:
         for error in diag['errors']:st.warning(error)
         if not docs:st.warning('Aucune publication détectée : consulter les URL et statuts ci-dessus.')
 with tabs[3]:
-    st.subheader('V2.4.1 — Lecture des PDF et OCR')
+    st.subheader('V2.4.2 — Audit PDF et colonnes financières')
     st.caption('Lecture page par page et affichage des libellés, montants candidats et preuves. Aucun chiffre n’est automatiquement certifié ni enregistré.')
     from brvm_catalog import catalog
     from auto_financials import download_pdf
@@ -122,6 +122,30 @@ with tabs[3]:
                     st.download_button('Exporter les preuves CSV',pd.DataFrame(found).to_csv(index=False).encode('utf-8-sig'),f'audit_pdf_{selected}.csv','text/csv')
                 else:st.warning('Aucun libellé reconnu. Vérifier le document et sa qualité texte.')
                 st.info('La présence de chiffres candidats ne démontre pas leur exactitude. Vérifier unités, colonnes N/N-1, périodes et états consolidés avant validation.')
+                st.divider()
+                st.markdown('#### V2.4.2 — Analyse des colonnes et des unités')
+                st.caption('Analyse OCR positionnelle supplémentaire. Les attributions d’année et conversions restent provisoires. Aucun enregistrement en base.')
+                if st.button('Analyser les colonnes N/N-1 et les unités',key=f'v242-{selected}'):
+                    try:
+                        from brvm_table_audit import extract_table_evidence
+                        with st.spinner('Analyse positionnelle OCR des tableaux…'):
+                            raw2=download_pdf(source['URL'])
+                            table_rows,table_diag=extract_table_evidence(raw2,source['Titre'],max_pages=ocr_pages)
+                            st.session_state[f'v242-table-{selected}']=(source['URL'],table_rows,table_diag)
+                    except Exception as exc:st.error(f'Analyse V2.4.2 : {type(exc).__name__}: {exc}')
+                table_result=st.session_state.get(f'v242-table-{selected}')
+                if table_result and table_result[0]==source['URL']:
+                    _,table_rows,table_diag=table_result
+                    a,b,c=st.columns(3)
+                    a.metric('Lignes de montants candidates',len(table_rows))
+                    b.metric('Années attribuées provisoirement',table_diag['assigned'])
+                    c.metric('Montants sans attribution',table_diag['unassigned'])
+                    for error in table_diag['ocr_errors']:st.error(error)
+                    if table_rows:
+                        st.dataframe(pd.DataFrame(table_rows),hide_index=True,use_container_width=True)
+                        st.download_button('Exporter audit des colonnes CSV',pd.DataFrame(table_rows).to_csv(index=False).encode('utf-8-sig'),f'audit_colonnes_{selected}.csv','text/csv')
+                    else:st.warning('Aucun montant exploitable détecté. Vérification manuelle requise.')
+                    st.warning('Ne pas utiliser les montants dans le Dashboard, T1/S1/T3 ou Valorisation sans vérification des colonnes, unités et comptes individuels/consolidés.')
 with tabs[4]:
     st.write('Import CSV de valeurs vérifiées dans les publications, ou pré-extraction d’un PDF natif. Toute valeur importée reste en attente de validation.')
     st.download_button('Télécharger le modèle CSV',open(os.path.join(os.path.dirname(__file__),'modele_import.csv'),'rb').read(),'modele_import.csv')
