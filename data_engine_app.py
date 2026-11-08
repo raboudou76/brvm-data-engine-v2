@@ -5,8 +5,8 @@ import streamlit as st
 from data_engine import connect,records,stage,approve,parse_csv,coverage
 from structured_financials import extract_structured
 
-st.set_page_config(page_title='BRVM Data Engine V2.4',layout='wide')
-st.title('BRVM RADAR — Data Engine V2.4')
+st.set_page_config(page_title='BRVM Data Engine V2.4.1',layout='wide')
+st.title('BRVM RADAR — Data Engine V2.4.1')
 st.caption('Pilote indépendant : stockage, provenance et validation humaine des données financières')
 try: db=connect()
 except Exception as exc: st.error(f'Base indisponible : {exc}');st.stop()
@@ -15,7 +15,7 @@ symbols=['SMBC','SGBC','BOAB','CBIBF']
 for r in db.execute('SELECT DISTINCT symbol FROM financials'):
     if r['symbol'] not in symbols:symbols.append(r['symbol'])
 selected=st.selectbox('Société',symbols)
-tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4','Importer les rapports','Validation','Contrôle qualité'])
+tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4.1','Importer les rapports','Validation','Contrôle qualité'])
 with tabs[0]:
     rs=records(db,selected,True)
     if not rs: st.info('Aucune donnée encore vérifiée pour cette société.')
@@ -79,11 +79,13 @@ with tabs[2]:
         for error in diag['errors']:st.warning(error)
         if not docs:st.warning('Aucune publication détectée : consulter les URL et statuts ci-dessus.')
 with tabs[3]:
-    st.subheader('V2.4 — Audit des PDF officiels')
+    st.subheader('V2.4.1 — Lecture des PDF et OCR')
     st.caption('Lecture page par page et affichage des libellés, montants candidats et preuves. Aucun chiffre n’est automatiquement certifié ni enregistré.')
     from brvm_catalog import catalog
     from auto_financials import download_pdf
     from brvm_pdf_audit import extract_candidates
+    use_ocr=st.checkbox('Activer OCR pour les pages scannées',value=True)
+    ocr_pages=st.slider('Nombre maximal de pages OCR par rapport',1,20,8)
     documents=st.session_state.get(f'catalog-{selected}')
     if not documents:
         st.info('Lancer d’abord la recherche dans Catalogue documentaire pour cette société.')
@@ -100,18 +102,21 @@ with tabs[3]:
                     with st.spinner('Lecture et audit du PDF…'):
                         raw=download_pdf(chosen['URL'])
                         if len(raw)>25*1024*1024:raise ValueError('PDF supérieur à 25 Mo')
-                        found,diagnostic=extract_candidates(raw,chosen['Titre'],chosen['Période'])
+                        found,diagnostic=extract_candidates(raw,chosen['Titre'],chosen['Période'],use_ocr=use_ocr,ocr_max_pages=ocr_pages)
                         st.session_state[f'audit-{selected}']=(chosen,found,diagnostic)
                 except Exception as exc:st.error(f'Audit PDF : {type(exc).__name__}: {exc}')
             result=st.session_state.get(f'audit-{selected}')
             if result:
                 source,found,diagnostic=result
                 st.write('Rapport audité :',source['Titre'])
-                c1,c2,c3=st.columns(3)
+                c1,c2,c3,c4=st.columns(4)
                 c1.metric('Pages',diagnostic['pages'])
                 c2.metric('Pages avec texte',diagnostic['pages_with_text'])
-                c3.metric('Libellés candidats',diagnostic['candidates'])
+                c3.metric('Pages OCR',diagnostic.get('pages_ocr',0))
+                c4.metric('Libellés candidats',diagnostic['candidates'])
+                for err in diagnostic.get('ocr_errors',[]):st.error(err)
                 for note in diagnostic['notes']:st.warning(note)
+                st.warning('Les valeurs OCR sont des candidats non certifiés : comparer visuellement avec le PDF officiel avant toute validation.')
                 if found:
                     st.dataframe(pd.DataFrame(found),hide_index=True,use_container_width=True)
                     st.download_button('Exporter les preuves CSV',pd.DataFrame(found).to_csv(index=False).encode('utf-8-sig'),f'audit_pdf_{selected}.csv','text/csv')
