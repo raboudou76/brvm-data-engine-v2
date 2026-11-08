@@ -195,6 +195,30 @@ with tabs[3]:
                         st.dataframe(pd.DataFrame(multi_rows),hide_index=True,use_container_width=True)
                         st.download_button('Exporter V2.4.4 CSV',pd.DataFrame(multi_rows).to_csv(index=False).encode('utf-8-sig'),f'v244_{selected}.csv','text/csv')
                     st.warning('Candidats OCR non certifiés. Années et unités à confirmer dans le PDF avant toute utilisation.')
+                st.divider()
+                st.markdown('#### V2.4.5 — Regroupement des fragments OCR (pilote)')
+                st.caption('Analyse géométrique en lecture seule. Aucune valeur automatiquement validée ou enregistrée.')
+                if st.button('Tester regroupement OCR V2.4.5',key=f'v245-{selected}'):
+                    try:
+                        from brvm_cell_engine import extract as extract_cells
+                        with st.spinner('Reconstitution des cellules OCR…'):
+                            raw5=download_pdf(source['URL'])
+                            cell_rows,cell_diag=extract_cells(raw5,source['Titre'],max_pages=ocr_pages)
+                            st.session_state[f'v245-table-{selected}']=(source['URL'],cell_rows,cell_diag)
+                    except Exception as exc:st.error(f'V2.4.5 : {type(exc).__name__}: {exc}')
+                cell_result=st.session_state.get(f'v245-table-{selected}')
+                if cell_result and cell_result[0]==source['URL']:
+                    _,cell_rows,cell_diag=cell_result
+                    a,b,c=st.columns(3)
+                    a.metric('Montants candidats',len(cell_rows))
+                    b.metric('Années proposées',cell_diag['assigned'])
+                    c.metric('Sans attribution',cell_diag['unassigned'])
+                    st.caption(f"Pages traitées : {cell_diag['pages_processed']} · En-têtes : {cell_diag['headers']}")
+                    for e in cell_diag['errors']:st.error(e)
+                    if cell_rows:
+                        st.dataframe(pd.DataFrame(cell_rows),hide_index=True,use_container_width=True)
+                        st.download_button('Exporter V2.4.5 CSV',pd.DataFrame(cell_rows).to_csv(index=False).encode('utf-8-sig'),f'v245_{selected}.csv','text/csv')
+                    st.warning('Valeurs NON CERTIFIÉES. Ne pas alimenter Dashboard, T1/S1/T3 ou Valorisation.')
 with tabs[4]:
     st.write('Import CSV de valeurs vérifiées dans les publications, ou pré-extraction d’un PDF natif. Toute valeur importée reste en attente de validation.')
     st.download_button('Télécharger le modèle CSV',open(os.path.join(os.path.dirname(__file__),'modele_import.csv'),'rb').read(),'modele_import.csv')
