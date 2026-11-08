@@ -5,4 +5,4 @@ requests>=2.31
 beautifulsoup4>=4.12
 pytesseract>=0.3.13
 Pillow>=10.0
-
+SQLAlchemy>=2.0,<3
