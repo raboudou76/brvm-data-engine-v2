@@ -15,7 +15,7 @@ symbols=['SMBC','SGBC','BOAB','CBIBF']
 for r in db.execute('SELECT DISTINCT symbol FROM financials'):
     if r['symbol'] not in symbols:symbols.append(r['symbol'])
 selected=st.selectbox('Société',symbols)
-tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4.1','Importer les rapports','Validation','Contrôle qualité','Pipeline V2.5.0','Extraction hybride V2.5.1','Réconciliation V2.5.2','Consolidation V2.5.3'])
+tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4.1','Importer les rapports','Validation','Contrôle qualité','Pipeline V2.5.0','Extraction hybride V2.5.1','Réconciliation V2.5.2','Consolidation V2.5.3','Validation structurelle V2.5.4'])
 with tabs[0]:
     rs=records(db,selected,True)
     if not rs: st.info('Aucune donnée encore vérifiée pour cette société.')
@@ -419,3 +419,36 @@ with tabs[10]:
                     st.dataframe(pd.DataFrame(result['fragments']),hide_index=True,use_container_width=True)
                 st.warning('Aucun montant ni exercice n’est certifié. Vérifier les valeurs reconstituées, les en-têtes N/N-1 et les unités sur le PDF.')
     except Exception as exc:st.error(f'Archives indisponibles : {type(exc).__name__}: {exc}')
+
+with tabs[11]:
+    st.subheader('V2.5.4 — Validation structurelle des cellules OCR')
+    st.caption('Lecture seule : vérification des fusions de colonnes, des années et des unités. Aucune certification automatique.')
+    from brvm_v254_validate import run_v254
+    from brvm_hybrid_extractor import archived_documents as archived_v254
+    try:
+        docs=[d for d in archived_v254(selected) if d.get('stored_path')]
+        if not docs:st.info('Aucun PDF archivé : lancer le Pipeline V2.5.0.')
+        else:
+            ix=st.selectbox('Rapport archivé V2.5.4',range(len(docs)),
+                format_func=lambda i:f"{docs[i].get('fiscal_year')} · {docs[i].get('period')} · {docs[i]['title']}",key='v254_doc')
+            pages=st.slider('Pages maximales V2.5.4',1,30,8,key='v254_pages')
+            if st.button('Contrôler la structure OCR V2.5.4',key='v254_run'):
+                with st.spinner('Contrôle des cellules, en-têtes et unités…'):
+                    try:st.session_state[f'v254_{selected}_{docs[ix]["id"]}']=run_v254(docs[ix],pages)
+                    except Exception as exc:st.error(f'V2.5.4 : {type(exc).__name__}: {exc}')
+            result=st.session_state.get(f'v254_{selected}_{docs[ix]["id"]}')
+            if result:
+                a,b,c=st.columns(3)
+                a.metric('Candidats pour revue',len(result['candidates']))
+                b.metric('Rejets structurels',len(result['rejected_structural']))
+                c.metric('Exercices attribués avec preuve',sum(r.get('fiscal_year_proposed') is not None for r in result['candidates']))
+                if result['errors']:st.warning('Diagnostics : '+' | '.join(result['errors']))
+                fields=['indicator','raw_amount','numeric_candidate','column_index','fiscal_year_proposed','unit_detected','page_pdf','validation_status','validation_reason']
+                df=pd.DataFrame(result['candidates'])
+                if not df.empty:st.dataframe(df[[x for x in fields if x in df.columns]],hide_index=True,use_container_width=True)
+                st.download_button('Exporter audit V2.5.4 CSV',df.to_csv(index=False).encode('utf-8-sig'),f'audit_v254_{selected}.csv','text/csv',key='v254_export')
+                with st.expander('Valeurs rejetées (audit conservé)'):
+                    st.dataframe(pd.DataFrame(result['rejected_structural']),hide_index=True,use_container_width=True)
+                st.warning('Candidats NON CERTIFIÉS. Comparer les exercices, unités et chiffres au PDF officiel avant toute utilisation.')
+    except Exception as exc:st.error(f'Archives indisponibles : {type(exc).__name__}: {exc}')
+ 
