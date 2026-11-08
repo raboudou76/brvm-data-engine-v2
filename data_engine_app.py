@@ -219,6 +219,33 @@ with tabs[3]:
                         st.dataframe(pd.DataFrame(cell_rows),hide_index=True,use_container_width=True)
                         st.download_button('Exporter V2.4.5 CSV',pd.DataFrame(cell_rows).to_csv(index=False).encode('utf-8-sig'),f'v245_{selected}.csv','text/csv')
                     st.warning('Valeurs NON CERTIFIÉES. Ne pas alimenter Dashboard, T1/S1/T3 ou Valorisation.')
+                st.divider()
+                st.markdown('#### V2.4.6 — Contrôle qualité des extractions (lecture seule)')
+                st.caption('Audit des montants V2.4.5, années, unités, doublons et preuves. Aucun enregistrement automatique.')
+                if st.button('Contrôler la qualité V2.4.6',key=f'v246-{selected}'):
+                    try:
+                        from brvm_cell_engine import extract as extract_cells
+                        from brvm_quality_engine import evaluate
+                        with st.spinner('Extraction OCR et contrôle qualité…'):
+                            raw6=download_pdf(source['URL'])
+                            quality_source,quality_diag=extract_cells(raw6,source['Titre'],max_pages=ocr_pages)
+                            quality_rows,quality_summary=evaluate(quality_source,quality_diag,source['URL'],source['Titre'],source.get('Année'))
+                            st.session_state[f'v246-table-{selected}']=(source['URL'],quality_rows,quality_summary,quality_diag)
+                    except Exception as exc:st.error(f'V2.4.6 : {type(exc).__name__}: {exc}')
+                quality_result=st.session_state.get(f'v246-table-{selected}')
+                if quality_result and quality_result[0]==source['URL']:
+                    _,quality_rows,quality_summary,quality_diag=quality_result
+                    a,b,c=st.columns(3)
+                    a.metric('Valeurs candidates',quality_summary['candidats'])
+                    b.metric('Bloquées',quality_summary['bloques'])
+                    c.metric('À vérifier',quality_summary['a_verifier'])
+                    st.caption(quality_summary['note'])
+                    for err in quality_diag.get('errors',[]):st.error(err)
+                    if quality_rows:
+                        st.dataframe(pd.DataFrame(quality_rows),hide_index=True,use_container_width=True)
+                        st.download_button('Exporter audit qualité V2.4.6 CSV',pd.DataFrame(quality_rows).to_csv(index=False).encode('utf-8-sig'),f'v246_qualite_{selected}.csv','text/csv')
+                    else:st.warning('Aucune valeur candidate. Vérifier le PDF et le mode OCR.')
+                    st.warning('Aucune valeur certifiée ou transférée vers la base financière. Vérifier le PDF original avant toute approbation.')
 with tabs[4]:
     st.write('Import CSV de valeurs vérifiées dans les publications, ou pré-extraction d’un PDF natif. Toute valeur importée reste en attente de validation.')
     st.download_button('Télécharger le modèle CSV',open(os.path.join(os.path.dirname(__file__),'modele_import.csv'),'rb').read(),'modele_import.csv')
