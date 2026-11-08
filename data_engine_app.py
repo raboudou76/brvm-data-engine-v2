@@ -15,7 +15,7 @@ symbols=['SMBC','SGBC','BOAB','CBIBF']
 for r in db.execute('SELECT DISTINCT symbol FROM financials'):
     if r['symbol'] not in symbols:symbols.append(r['symbol'])
 selected=st.selectbox('Société',symbols)
-tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4.1','Importer les rapports','Validation','Contrôle qualité','Pipeline V2.5.0','Extraction hybride V2.5.1','Réconciliation V2.5.2','Consolidation V2.5.3','Validation structurelle V2.5.4'])
+tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4.1','Importer les rapports','Validation','Contrôle qualité','Pipeline V2.5.0','Extraction hybride V2.5.1','Réconciliation V2.5.2','Consolidation V2.5.3','Validation structurelle V2.5.4','En-têtes et unités V2.5.5'])
 with tabs[0]:
     rs=records(db,selected,True)
     if not rs: st.info('Aucune donnée encore vérifiée pour cette société.')
@@ -451,4 +451,35 @@ with tabs[11]:
                     st.dataframe(pd.DataFrame(result['rejected_structural']),hide_index=True,use_container_width=True)
                 st.warning('Candidats NON CERTIFIÉS. Comparer les exercices, unités et chiffres au PDF officiel avant toute utilisation.')
     except Exception as exc:st.error(f'Archives indisponibles : {type(exc).__name__}: {exc}')
- 
+
+with tabs[12]:
+    st.subheader('V2.5.5 — Attribution des exercices et des unités')
+    st.caption('En-têtes géométriques et unités documentées ; aucun résultat certifié automatiquement.')
+    from brvm_v255_headers import run_v255
+    from brvm_hybrid_extractor import archived_documents as archived_v255
+    try:
+        docs=[d for d in archived_v255(selected) if d.get('stored_path')]
+        if not docs:st.info('Aucun PDF archivé : lancer le Pipeline V2.5.0.')
+        else:
+            ix=st.selectbox('Rapport archivé V2.5.5',range(len(docs)),
+                format_func=lambda i:f"{docs[i].get('fiscal_year')} · {docs[i].get('period')} · {docs[i]['title']}",key='v255_doc')
+            pages=st.slider('Pages maximales V2.5.5',1,30,8,key='v255_pages')
+            if st.button('Analyser en-têtes et unités V2.5.5',key='v255_run'):
+                with st.spinner('Analyse OCR des en-têtes et des unités…'):
+                    try:st.session_state[f'v255_{selected}_{docs[ix]["id"]}']=run_v255(docs[ix],pages)
+                    except Exception as exc:st.error(f'V2.5.5 : {type(exc).__name__}: {exc}')
+            result=st.session_state.get(f'v255_{selected}_{docs[ix]["id"]}')
+            if result:
+                rows=result['candidates'];a,b,c=st.columns(3)
+                a.metric('Candidats non certifiés',len(rows))
+                b.metric('Années prouvées',sum(r.get('fiscal_year_proposed') is not None for r in rows))
+                c.metric('Unités prouvées',sum(r.get('unit_confidence')=='MENTION_EXPLICITE' for r in rows))
+                if result['errors']:st.warning('Diagnostics : '+' | '.join(result['errors']))
+                df=pd.DataFrame(rows)
+                fields=['indicator','numeric_candidate','column_index','fiscal_year_proposed','year_confidence','unit_detected','amount_millions_fcfa','unit_confidence','page_pdf','v255_diagnostic']
+                if not df.empty:st.dataframe(df[[x for x in fields if x in df.columns]],hide_index=True,use_container_width=True)
+                st.download_button('Exporter audit V2.5.5 CSV',df.to_csv(index=False).encode('utf-8-sig'),f'audit_v255_{selected}.csv','text/csv',key='v255_export')
+                with st.expander('Preuves et audit détaillés'):
+                    if not df.empty:st.dataframe(df,hide_index=True,use_container_width=True)
+                st.warning('NON CERTIFIÉ : vérifier visuellement les années, les unités et les montants sur le PDF officiel.')
+    except Exception as exc:st.error(f'Archives indisponibles : {type(exc).__name__}: {exc}')
