@@ -576,3 +576,17 @@ with tabs[15]:
             st.subheader('Indicateurs annuels — provisoires')
             st.dataframe(pd.DataFrame(analytics260),hide_index=True,use_container_width=True)
         st.info('Les valeurs sans exercice attribué sont bloquées. Les ratios nécessitant des données absentes (BPA, PER, dividendes, valorisation) ne sont pas calculés.')
+
+# Test PostgreSQL Supabase V2.7.0
+from brvm_v270_postgres import tester_connexion
+
+st.divider()
+st.subheader("Connexion Supabase PostgreSQL")
+
+if st.button("Tester la connexion Supabase"):
+    succes, message = tester_connexion()
+
+    if succes:
+        st.success(message)
+    else:
+        st.error(message)
