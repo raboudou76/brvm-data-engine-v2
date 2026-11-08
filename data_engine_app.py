@@ -15,7 +15,7 @@ symbols=['SMBC','SGBC','BOAB','CBIBF']
 for r in db.execute('SELECT DISTINCT symbol FROM financials'):
     if r['symbol'] not in symbols:symbols.append(r['symbol'])
 selected=st.selectbox('Société',symbols)
-tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4.1','Importer les rapports','Validation','Contrôle qualité','Pipeline V2.5.0','Extraction hybride V2.5.1'])
+tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4.1','Importer les rapports','Validation','Contrôle qualité','Pipeline V2.5.0','Extraction hybride V2.5.1','Réconciliation V2.5.2'])
 with tabs[0]:
     rs=records(db,selected,True)
     if not rs: st.info('Aucune donnée encore vérifiée pour cette société.')
@@ -354,4 +354,35 @@ with tabs[8]:
                         f'extraction_v251_{selected}.csv','text/csv',key='v251_export')
                 else:st.warning('Aucun candidat détecté : consulter les diagnostics des pages.')
                 st.warning('Aucune valeur n’est certifiée. Vérifier visuellement les cellules, années, unités et comptes consolidés/individuels.')
+    except Exception as exc:st.error(f'Archives V2.5.0 indisponibles : {type(exc).__name__}: {exc}')
+
+with tabs[9]:
+    st.subheader('V2.5.2 — Réconciliation OCR et colonnes (lecture seule)')
+    st.caption('Conserve la V2.5.1 et ajoute les candidats géométriques. Aucune écriture financière ni certification.')
+    from brvm_hybrid_extractor import archived_documents as archived_v252
+    from brvm_v252_reconcile import reconcile
+    try:
+        docs_v252=archived_v252(selected)
+        docs_v252=[d for d in docs_v252 if d.get('stored_path')]
+        if not docs_v252:
+            st.info('Aucun PDF archivé : exécuter le Pipeline V2.5.0.')
+        else:
+            ix_v252=st.selectbox('Rapport archivé',range(len(docs_v252)),format_func=lambda i: f"{docs_v252[i].get('fiscal_year')} · {docs_v252[i].get('period')} · {docs_v252[i]['title']}",key='v252_doc')
+            pages_v252=st.slider('Pages maximales',1,30,8,key='v252_pages')
+            if st.button('Réconcilier les cellules OCR V2.5.2',key='v252_run'):
+                with st.spinner('Extraction et comparaison des candidats…'):
+                    try:st.session_state[f'v252_{selected}_{docs_v252[ix_v252]["id"]}']=reconcile(docs_v252[ix_v252],pages_v252)
+                    except Exception as exc:st.error(f'Réconciliation : {type(exc).__name__}: {exc}')
+            result_v252=st.session_state.get(f'v252_{selected}_{docs_v252[ix_v252]["id"]}')
+            if result_v252:
+                a,b,c=st.columns(3)
+                a.metric('Candidats V2.5.1',result_v252['original_count'])
+                b.metric('Nouveaux candidats',result_v252['new_candidates'])
+                c.metric('Total distinct',len(result_v252['candidates']))
+                if result_v252['errors']:st.warning('Diagnostics OCR : '+' | '.join(result_v252['errors']))
+                df_v252=pd.DataFrame(result_v252['candidates'])
+                priority=['indicator','fiscal_year_proposed','raw_amount','numeric_candidate','unit_detected','amount_millions_fcfa','page_pdf','warning','status']
+                st.dataframe(df_v252[[x for x in priority if x in df_v252.columns]],hide_index=True,use_container_width=True)
+                st.download_button('Exporter audit V2.5.2 CSV',df_v252.to_csv(index=False).encode('utf-8-sig'),f'audit_v252_{selected}.csv','text/csv',key='v252_export')
+                st.warning('Tous les montants sont NON CERTIFIÉS : vérifier les années, unités et colonnes sur le PDF officiel.')
     except Exception as exc:st.error(f'Archives V2.5.0 indisponibles : {type(exc).__name__}: {exc}')
