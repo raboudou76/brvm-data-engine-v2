@@ -15,7 +15,7 @@ symbols=['SMBC','SGBC','BOAB','CBIBF']
 for r in db.execute('SELECT DISTINCT symbol FROM financials'):
     if r['symbol'] not in symbols:symbols.append(r['symbol'])
 selected=st.selectbox('Société',symbols)
-tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4.1','Importer les rapports','Validation','Contrôle qualité','Pipeline V2.5.0'])
+tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4.1','Importer les rapports','Validation','Contrôle qualité','Pipeline V2.5.0','Extraction hybride V2.5.1'])
 with tabs[0]:
     rs=records(db,selected,True)
     if not rs: st.info('Aucune donnée encore vérifiée pour cette société.')
@@ -321,3 +321,37 @@ with tabs[7]:
     except Exception as exc:
         st.error(f'Historique pipeline indisponible : {exc}')
     st.warning('Sur Streamlit Community Cloud, les fichiers PDF et SQLite locaux ne sont pas persistants. Configurer PostgreSQL et un stockage de fichiers persistant avant automatisation quotidienne.')
+
+with tabs[8]:
+    st.subheader('V2.5.1 — Extraction hybride des PDF archivés (lecture seule)')
+    st.caption('PDF natif d’abord, OCR en secours. Aucun chiffre automatiquement validé, enregistré ni envoyé à BRVM RADAR.')
+    from brvm_hybrid_extractor import archived_documents, extract_archived
+    try:
+        archive_docs=archived_documents(selected)
+        archive_docs=[d for d in archive_docs if d.get('stored_path')]
+        if not archive_docs:
+            st.info('Aucun PDF archivé pour cette société : lancer d’abord le pipeline V2.5.0.')
+        else:
+            chosen=st.selectbox('PDF archivé à analyser',range(len(archive_docs)),
+                format_func=lambda i: f"{archive_docs[i].get('fiscal_year')} · {archive_docs[i].get('period')} · {archive_docs[i]['title']}",key='v251_doc')
+            max_p=st.slider('Nombre maximal de pages à analyser',1,30,8,key='v251_pages')
+            if st.button('Extraire les tableaux du PDF archivé',key='v251_run'):
+                with st.spinner('Lecture du PDF et extraction hybride…'):
+                    try:st.session_state[f'v251_result_{selected}_{archive_docs[chosen]["id"]}']=extract_archived(archive_docs[chosen],max_p)
+                    except Exception as exc:st.error(f'Extraction : {type(exc).__name__}: {exc}')
+            result=st.session_state.get(f'v251_result_{selected}_{archive_docs[chosen]["id"]}')
+            if result:
+                st.write('Rapport analysé :',result['title'])
+                c1,c2,c3=st.columns(3)
+                c1.metric('Pages du PDF',result['pages_total'])
+                c2.metric('Pages analysées',result['pages_analyzed'])
+                c3.metric('Montants candidats',len(result['candidates']))
+                st.dataframe(pd.DataFrame(result['page_diagnostics']),hide_index=True,use_container_width=True)
+                if result['candidates']:
+                    df=pd.DataFrame(result['candidates'])
+                    st.dataframe(df,hide_index=True,use_container_width=True)
+                    st.download_button('Exporter les preuves candidates CSV',df.to_csv(index=False).encode('utf-8-sig'),
+                        f'extraction_v251_{selected}.csv','text/csv',key='v251_export')
+                else:st.warning('Aucun candidat détecté : consulter les diagnostics des pages.')
+                st.warning('Aucune valeur n’est certifiée. Vérifier visuellement les cellules, années, unités et comptes consolidés/individuels.')
+    except Exception as exc:st.error(f'Archives V2.5.0 indisponibles : {type(exc).__name__}: {exc}')
