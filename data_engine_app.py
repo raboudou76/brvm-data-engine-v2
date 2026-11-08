@@ -15,7 +15,7 @@ symbols=['SMBC','SGBC','BOAB','CBIBF']
 for r in db.execute('SELECT DISTINCT symbol FROM financials'):
     if r['symbol'] not in symbols:symbols.append(r['symbol'])
 selected=st.selectbox('Société',symbols)
-tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4.1','Importer les rapports','Validation','Contrôle qualité'])
+tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4.1','Importer les rapports','Validation','Contrôle qualité','Pipeline V2.5.0'])
 with tabs[0]:
     rs=records(db,selected,True)
     if not rs: st.info('Aucune donnée encore vérifiée pour cette société.')
@@ -289,3 +289,35 @@ with tabs[6]:
     st.caption('La couverture mesure uniquement les valeurs validées. Une valeur absente n’est jamais assimilée à zéro.')
     st.download_button('Exporter les données vérifiées',pd.DataFrame(records(db,verified_only=True)).to_csv(index=False).encode('utf-8-sig'),'brvm_financials_verified.csv','text/csv')
 st.caption('Attention : sur Streamlit Community Cloud, le fichier SQLite local peut disparaître au redéploiement. Utiliser un volume persistant ou PostgreSQL avant production.')
+
+with tabs[7]:
+    st.subheader('V2.5.0 — Veille et archivage incrémental des PDF officiels')
+    st.caption('Collecte et archivage seulement : aucune extraction financière, certification ou synchronisation vers BRVM RADAR.')
+    from brvm_pipeline import ingest, history, runs
+    pgs=st.slider('Pages du catalogue à parcourir',1,8,3,key='v250_pages')
+    max_dl=st.slider('Nombre maximum de nouveaux PDF à télécharger',1,30,8,key='v250_max')
+    if st.button('Collecter et archiver les PDF officiels',type='primary',key='v250_run'):
+        with st.spinner('Recherche et archivage incrémental des publications…'):
+            try:
+                st.session_state['v250_result']=ingest(selected,pages=pgs,max_downloads=max_dl)
+            except Exception as exc:
+                st.error(f'Pipeline : {type(exc).__name__}: {exc}')
+    result=st.session_state.get('v250_result')
+    if result:
+        cols=st.columns(5)
+        for col,label,key in zip(cols,['PDF identifiés','Nouvelles références','Téléchargés','Ignorés','Échecs'],['discovered','new_items','downloaded','skipped','failed']):
+            col.metric(label,result.get(key,0))
+        for error in result.get('errors',[]):st.warning(error)
+    try:
+        items=history(selected)
+        if items:
+            st.write('Archives documentaires')
+            st.dataframe(pd.DataFrame(items),hide_index=True,use_container_width=True)
+            st.download_button('Exporter inventaire CSV',pd.DataFrame(items).to_csv(index=False).encode('utf-8-sig'),f'archives_{selected}.csv','text/csv',key='v250_csv')
+        logs=runs()
+        if logs:
+            with st.expander('Journal des exécutions'):
+                st.dataframe(pd.DataFrame(logs),hide_index=True,use_container_width=True)
+    except Exception as exc:
+        st.error(f'Historique pipeline indisponible : {exc}')
+    st.warning('Sur Streamlit Community Cloud, les fichiers PDF et SQLite locaux ne sont pas persistants. Configurer PostgreSQL et un stockage de fichiers persistant avant automatisation quotidienne.')
