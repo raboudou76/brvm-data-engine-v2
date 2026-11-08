@@ -15,7 +15,7 @@ symbols=['SMBC','SGBC','BOAB','CBIBF']
 for r in db.execute('SELECT DISTINCT symbol FROM financials'):
     if r['symbol'] not in symbols:symbols.append(r['symbol'])
 selected=st.selectbox('Société',symbols)
-tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4.1','Importer les rapports','Validation','Contrôle qualité','Pipeline V2.5.0','Extraction hybride V2.5.1','Réconciliation V2.5.2','Consolidation V2.5.3','Validation structurelle V2.5.4','En-têtes et unités V2.5.5','Alignement V2.5.6'])
+tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4.1','Importer les rapports','Validation','Contrôle qualité','Pipeline V2.5.0','Extraction hybride V2.5.1','Réconciliation V2.5.2','Consolidation V2.5.3','Validation structurelle V2.5.4','En-têtes et unités V2.5.5','Alignement V2.5.6','Grille comptable V2.5.7'])
 with tabs[0]:
     rs=records(db,selected,True)
     if not rs: st.info('Aucune donnée encore vérifiée pour cette société.')
@@ -515,3 +515,33 @@ with tabs[13]:
                     if not df.empty:st.dataframe(df,hide_index=True,use_container_width=True)
                 st.warning('NON CERTIFIÉ : vérifier les en-têtes, unités et montants sur le PDF officiel.')
     except Exception as exc:st.error(f'Archives indisponibles : {type(exc).__name__}: {exc}')
+
+with tabs[14]:
+    st.subheader('V2.5.7 — Grille comptable par page')
+    st.caption('Années proposées uniquement avec en-tête explicite et alignement géométrique ; montants non certifiés.')
+    from brvm_v257_grid import run_v257
+    from brvm_hybrid_extractor import archived_documents as archived_v257
+    if selected:
+        docs=[d for d in archived_v257(selected) if d.get('stored_path')]
+        if docs:
+            ix=st.selectbox('Document archivé V2.5.7',range(len(docs)),format_func=lambda i:f"{docs[i].get('fiscal_year')} · {docs[i].get('period')} · {docs[i]['title']}",key='v257_doc')
+            pages=st.slider('Pages maximales V2.5.7',1,30,8,key='v257_pages')
+            key=f'v257_{selected}_{docs[ix]["id"]}'
+            if st.button('Reconstruire la grille V2.5.7',key='v257_run'):
+                with st.spinner('Analyse géométrique des grilles...'):
+                    try:st.session_state[key]=run_v257(docs[ix],pages)
+                    except Exception as exc:st.error(f'Analyse impossible : {exc}')
+            result=st.session_state.get(key)
+            if result:
+                import pandas as pd
+                df=pd.DataFrame(result['candidates'])
+                years=int(df['fiscal_year_proposed'].notna().sum()) if len(df) else 0
+                units=int(df['amount_millions_fcfa'].notna().sum()) if len(df) else 0
+                c1,c2,c3=st.columns(3)
+                c1.metric('Candidats',len(df));c2.metric('Exercices proposés',years);c3.metric('Unités documentées',units)
+                st.write('Grilles identifiées (par page) :',result.get('v257_grids',{}))
+                fields=['indicator','numeric_candidate','page_pdf','v256_x','v257_grid_x','v257_grid_distance','fiscal_year_proposed','year_confidence','unit_detected','unit_confidence','v257_grid_status','v257_grid_proof','v257_diagnostic']
+                st.dataframe(df[[c for c in fields if c in df.columns]],use_container_width=True)
+                st.download_button('Exporter audit V2.5.7 CSV',df.to_csv(index=False).encode('utf-8-sig'),f'audit_v257_{selected}.csv','text/csv',key='v257_export')
+                st.warning('Les exercices sont des propositions vérifiables ; aucun montant n’est certifié ni synchronisé avec BRVM RADAR.')
+        else:st.info('Aucun document archivé pour cette société.')
