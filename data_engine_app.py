@@ -5,8 +5,8 @@ import streamlit as st
 from data_engine import connect,records,stage,approve,parse_csv,coverage
 from structured_financials import extract_structured
 
-st.set_page_config(page_title='BRVM Data Engine V2.1',layout='wide')
-st.title('BRVM RADAR — Data Engine V2.1')
+st.set_page_config(page_title='BRVM Data Engine V2.3',layout='wide')
+st.title('BRVM RADAR — Data Engine V2.3')
 st.caption('Pilote indépendant : stockage, provenance et validation humaine des données financières')
 try: db=connect()
 except Exception as exc: st.error(f'Base indisponible : {exc}');st.stop()
@@ -15,7 +15,7 @@ symbols=['SMBC','SGBC','BOAB','CBIBF']
 for r in db.execute('SELECT DISTINCT symbol FROM financials'):
     if r['symbol'] not in symbols:symbols.append(r['symbol'])
 selected=st.selectbox('Société',symbols)
-tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Importer les rapports','Validation','Contrôle qualité'])
+tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Importer les rapports','Validation','Contrôle qualité'])
 with tabs[0]:
     rs=records(db,selected,True)
     if not rs: st.info('Aucune donnée encore vérifiée pour cette société.')
@@ -53,9 +53,32 @@ with tabs[1]:
         for c,label,key in zip(cols,['Rapports repérés','PDF lus','Valeurs financières extraites','Valeurs mises en attente'],['reports_found','pdf_read','financial_rows','staged']):c.metric(label,result[key])
         st.caption(f"Dividendes extraits : {result['dividend_rows']} · PDF en échec : {result['pdf_failed']}")
         if result['report_details']:st.dataframe(pd.DataFrame(result['report_details']),hide_index=True,use_container_width=True)
+        cd=result.get('catalog_diagnostic') or {}
+        if cd:
+            st.caption(f"Catalogue : {cd.get('documents_found',0)} documents, {cd.get('pdf_links',0)} liens PDF")
+            if cd.get('pages'):st.dataframe(pd.DataFrame(cd['pages']),hide_index=True,use_container_width=True)
         for error in result['errors']:st.warning(error)
         st.info('Consulte l’onglet Validation pour vérifier les valeurs, puis Historique vérifié pour afficher les histogrammes.')
 with tabs[2]:
+    st.subheader('Catalogue des publications BRVM')
+    st.caption('Recherche indépendante de l’extraction : rapports annuels et T1/S1/T3, sans certification automatique.')
+    cat_pages=st.slider('Pages du catalogue par société',1,8,3)
+    if st.button('Rechercher les publications officielles',type='primary'):
+        from brvm_catalog import catalog
+        with st.spinner('Exploration des pages officielles BRVM…'):
+            try:st.session_state[f'catalog-{selected}']=catalog(selected,cat_pages)
+            except Exception as exc:st.error(f'Catalogue : {type(exc).__name__}: {exc}')
+    data=st.session_state.get(f'catalog-{selected}')
+    if data:
+        docs,diag=data
+        st.metric('Documents identifiés',len(docs))
+        if docs:
+            st.dataframe(pd.DataFrame(docs),hide_index=True,use_container_width=True)
+            st.download_button('Exporter le catalogue CSV',pd.DataFrame(docs).to_csv(index=False).encode('utf-8-sig'),f'catalogue_{selected}.csv','text/csv')
+        if diag['pages']:st.dataframe(pd.DataFrame(diag['pages']),hide_index=True,use_container_width=True)
+        for error in diag['errors']:st.warning(error)
+        if not docs:st.warning('Aucune publication détectée : consulter les URL et statuts ci-dessus.')
+with tabs[3]:
     st.write('Import CSV de valeurs vérifiées dans les publications, ou pré-extraction d’un PDF natif. Toute valeur importée reste en attente de validation.')
     st.download_button('Télécharger le modèle CSV',open(os.path.join(os.path.dirname(__file__),'modele_import.csv'),'rb').read(),'modele_import.csv')
     csvfile=st.file_uploader('Importer un CSV',type='csv',key='csv')
@@ -84,7 +107,7 @@ with tabs[2]:
         n,errors=stage(db,st.session_state['pdf_rows'])
         st.success(f'{n} lignes en attente de validation')
         for err in errors:st.warning(err)
-with tabs[3]:
+with tabs[4]:
     pending=[r for r in records(db,selected) if r['status']=='a_verifier']
     if not pending:st.info('Aucune valeur en attente pour ce titre.')
     for r in pending:
@@ -93,7 +116,7 @@ with tabs[3]:
             st.warning('Comparer avec le PDF officiel avant de valider.')
             if st.button('J’ai vérifié cette valeur dans la source',key=f"ok-{r['symbol']}-{r['year']}-{r['metric']}"):
                 approve(db,r['symbol'],r['year'],r['metric']);st.rerun()
-with tabs[4]:
+with tabs[5]:
     st.dataframe(pd.DataFrame(coverage(db,symbols)),hide_index=True,use_container_width=True)
     st.caption('La couverture mesure uniquement les valeurs validées. Une valeur absente n’est jamais assimilée à zéro.')
     st.download_button('Exporter les données vérifiées',pd.DataFrame(records(db,verified_only=True)).to_csv(index=False).encode('utf-8-sig'),'brvm_financials_verified.csv','text/csv')
