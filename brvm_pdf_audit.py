@@ -28,42 +28,79 @@ def _unit(lines,idx):
     if not m:return None
     return 1 if 'million' in m[-1].group() else 0.001
 
-def extract_candidates(raw,title,period='ANNUEL',max_pages=160):
-    """Returns (candidates, diagnostics). Evidence includes PDF page and exact source line.
-    For multi-column financial statements values are intentionally NOT staged automatically.
+def _scan_lines(lines, page_no, year, period, method):
+    found=[]
+    for i,line in enumerate(lines):
+        clean=norm(line)
+        for metric,patterns in PATTERNS.items():
+            if not any(re.search(p,clean) for p in patterns):continue
+            tail=re.sub(r'^.*?(?:'+ '|'.join(patterns)+r')', '',clean,count=1)
+            nums=[]
+            for m in NUM.finditer(tail):
+                try:
+                    v=_num(m.group())
+                    if math.isfinite(v):nums.append(v)
+                except ValueError:pass
+            unit=_unit(lines,i)
+            found.append({'Année présumée':year,'Période':period,'Indicateur':metric,
+                'Valeurs brutes':tail.strip()[:130], 'Facteur vers millions FCFA':unit,
+                'Page PDF':page_no+1,'Ligne source':line[:280],
+                'Méthode':method,'Statut':'review_required',
+                'Motif':'OCR_a_verifier' if method=='OCR' else 'colonnes_et_unites_a_verifier',
+                'Nombres candidats (non attribués)':str(nums[:8])})
+    return found
+
+
+def extract_candidates(raw,title,period='ANNUEL',max_pages=160,use_ocr=True,ocr_max_pages=8,dpi=190):
+    """Direct text then OCR fallback for image-only pages. Never auto-certifies numbers.
+
+    OCR is capped to avoid long runs on Streamlit Cloud. All candidates remain unverified.
     """
     doc=fitz.open(stream=raw,filetype='pdf')
-    diagnostics={'pages':len(doc),'pages_with_text':0,'candidates':0,'review_required':0,'notes':[]}
+    diag={'pages':len(doc),'pages_with_text':0,'pages_ocr':0,'ocr_attempted':0,
+          'ocr_errors':[],'candidates':0,'review_required':0,'notes':[]}
+    year_matches=YEAR.findall(title)
+    year=int(year_matches[-1]) if year_matches else None
     candidates=[]
-    years=[int(y) for y in YEAR.findall(title)]
-    year=years[-1] if years else None
-    for page_no in range(min(len(doc),max_pages)):
-        text=doc[page_no].get_text('text',sort=True)
-        if len(text.strip())>50:diagnostics['pages_with_text']+=1
-        lines=[re.sub(r'\s+',' ',x).strip() for x in text.splitlines() if x.strip()]
-        for i,line in enumerate(lines):
-            clean=norm(line)
-            for metric,patterns in PATTERNS.items():
-                if not any(re.search(p,clean) for p in patterns):continue
-                # Only consider numeric values on same line; no adjacent-line guessing.
-                tail=re.sub(r'^.*?'+r'(?:'+ '|'.join(patterns)+r')', '',clean,count=1)
-                matches=list(NUM.finditer(tail))
-                nums=[]
-                for m in matches:
-                    try:
-                        v=_num(m.group())
-                        if math.isfinite(v):nums.append(v)
-                    except ValueError:pass
-                unit=_unit(lines,i)
-                # Single-value candidates with explicit unit can be manually staged; multiple columns require manual column/year check.
-                status='review_required'
-                reason=('unite_non_identifiee' if unit is None else 'colonnes_a_verifier' if len(nums)!=1 or len(matches)>0 and len(matches[0].group().replace(' ',''))>10 else 'verification_source_obligatoire')
-                candidates.append({'Année présumée':year,'Période':period,'Indicateur':metric,
-                  'Valeurs brutes':tail.strip()[:130],'Facteur vers millions FCFA':unit,
-                  'Page PDF':page_no+1,'Ligne source':line[:280],'Statut':status,'Motif':reason})
-    doc.close()
-    diagnostics['candidates']=len(candidates)
-    diagnostics['review_required']=len(candidates)
-    if not diagnostics['pages_with_text']:diagnostics['notes'].append('PDF image/scanné : extraction texte insuffisante; OCR ou lecture manuelle nécessaire')
-    if not year:diagnostics['notes'].append('Exercice non identifié dans le titre')
-    return candidates,diagnostics
+    try:
+        for page_no in range(min(len(doc),max_pages)):
+            page=doc[page_no]
+            direct=page.get_text('text',sort=True)
+            method='PDF texte'
+            text=direct
+            if len(direct.strip())>=50:
+                diag['pages_with_text']+=1
+            elif use_ocr and diag['ocr_attempted']<ocr_max_pages:
+                diag['ocr_attempted']+=1
+                try:
+                    import pytesseract
+                    from PIL import Image
+                    import io
+                    pix=page.get_pixmap(matrix=fitz.Matrix(dpi/72,dpi/72),alpha=False)
+                    im=Image.open(io.BytesIO(pix.tobytes('png')))
+                    # Use French OCR when installed; Streamlit packages.txt provisions it.
+                    languages=pytesseract.get_languages(config='')
+                    lang='fra+eng' if 'fra' in languages else 'eng'
+                    text=pytesseract.image_to_string(im,lang=lang,config='--psm 6',timeout=45)
+                    method='OCR'
+                    diag['pages_ocr']+=1
+                except Exception as exc:
+                    diag['ocr_errors'].append(f'Page {page_no+1}: {type(exc).__name__}: {str(exc)[:140]}')
+                    text=direct
+            lines=[re.sub(r'\s+',' ',x).strip() for x in text.splitlines() if x.strip()]
+            candidates.extend(_scan_lines(lines,page_no,year,period,method))
+        diag['candidates']=len(candidates)
+        diag['review_required']=len(candidates)
+        if diag['ocr_attempted'] and diag['pages_ocr']==0:
+            diag['notes'].append('OCR indisponible : vérifier packages.txt, requirements.txt et journaux Streamlit.')
+        if len(doc)>ocr_max_pages and use_ocr:
+            diag['notes'].append(f'OCR limité aux {ocr_max_pages} premières pages sans texte. Augmenter le plafond si nécessaire.')
+        if not diag['pages_with_text'] and not diag['pages_ocr']:
+            diag['notes'].append('Aucun texte exploitable; examen manuel nécessaire.')
+        if not candidates:
+            diag['notes'].append('Aucun libellé reconnu : vérifier les pages OCR et les libellés utilisés dans le document.')
+        if not year:diag['notes'].append('Exercice non identifié dans le titre.')
+        diag['notes'].append('Toute valeur OCR et tout montant candidat restent NON CERTIFIÉS.')
+        return candidates,diag
+    finally:
+        doc.close()
