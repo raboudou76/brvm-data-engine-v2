@@ -171,6 +171,30 @@ with tabs[3]:
                         st.download_button('Exporter audit universel CSV',pd.DataFrame(universal_rows).to_csv(index=False).encode('utf-8-sig'),f'audit_universel_{selected}.csv','text/csv')
                     else:st.warning('Aucun montant candidat reconstitué. Consulter le PDF original.')
                     st.warning('Toutes les attributions sont provisoires et non certifiées. Aucune valeur ne doit alimenter les calculs financiers avant validation.')
+                st.divider()
+                st.markdown('#### V2.4.4 — Lecture multi-colonnes, multi-exercices (pilote)')
+                st.caption('Méthode sans codes obligatoires, extraction en lecture seule, aucune certification ni synchronisation de la valorisation.')
+                if st.button('Tester extraction multi-années',key=f'v244-{selected}'):
+                    try:
+                        from brvm_layout_engine import extract
+                        with st.spinner('Lecture des lignes, dates et colonnes OCR…'):
+                            raw4=download_pdf(source['URL'])
+                            multi_rows,multi_diag=extract(raw4,source['Titre'],max_pages=ocr_pages)
+                            st.session_state[f'v244-table-{selected}']=(source['URL'],multi_rows,multi_diag)
+                    except Exception as exc:st.error(f'V2.4.4 : {type(exc).__name__}: {exc}')
+                multi_result=st.session_state.get(f'v244-table-{selected}')
+                if multi_result and multi_result[0]==source['URL']:
+                    _,multi_rows,multi_diag=multi_result
+                    a,b,c=st.columns(3)
+                    a.metric('Valeurs candidates',len(multi_rows))
+                    b.metric('Années proposées',multi_diag['assigned'])
+                    c.metric('Non attribuées',multi_diag['unassigned'])
+                    st.caption(f"Pages traitées : {multi_diag['pages_processed']} · Dates détectées : {multi_diag['headers']}")
+                    for e in multi_diag['errors']:st.error(e)
+                    if multi_rows:
+                        st.dataframe(pd.DataFrame(multi_rows),hide_index=True,use_container_width=True)
+                        st.download_button('Exporter V2.4.4 CSV',pd.DataFrame(multi_rows).to_csv(index=False).encode('utf-8-sig'),f'v244_{selected}.csv','text/csv')
+                    st.warning('Candidats OCR non certifiés. Années et unités à confirmer dans le PDF avant toute utilisation.')
 with tabs[4]:
     st.write('Import CSV de valeurs vérifiées dans les publications, ou pré-extraction d’un PDF natif. Toute valeur importée reste en attente de validation.')
     st.download_button('Télécharger le modèle CSV',open(os.path.join(os.path.dirname(__file__),'modele_import.csv'),'rb').read(),'modele_import.csv')
