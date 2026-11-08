@@ -5,8 +5,8 @@ import streamlit as st
 from data_engine import connect,records,stage,approve,parse_csv,coverage
 from structured_financials import extract_structured
 
-st.set_page_config(page_title='BRVM Data Engine V2.3',layout='wide')
-st.title('BRVM RADAR — Data Engine V2.3')
+st.set_page_config(page_title='BRVM Data Engine V2.4',layout='wide')
+st.title('BRVM RADAR — Data Engine V2.4')
 st.caption('Pilote indépendant : stockage, provenance et validation humaine des données financières')
 try: db=connect()
 except Exception as exc: st.error(f'Base indisponible : {exc}');st.stop()
@@ -15,7 +15,7 @@ symbols=['SMBC','SGBC','BOAB','CBIBF']
 for r in db.execute('SELECT DISTINCT symbol FROM financials'):
     if r['symbol'] not in symbols:symbols.append(r['symbol'])
 selected=st.selectbox('Société',symbols)
-tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Importer les rapports','Validation','Contrôle qualité'])
+tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4','Importer les rapports','Validation','Contrôle qualité'])
 with tabs[0]:
     rs=records(db,selected,True)
     if not rs: st.info('Aucune donnée encore vérifiée pour cette société.')
@@ -79,6 +79,45 @@ with tabs[2]:
         for error in diag['errors']:st.warning(error)
         if not docs:st.warning('Aucune publication détectée : consulter les URL et statuts ci-dessus.')
 with tabs[3]:
+    st.subheader('V2.4 — Audit des PDF officiels')
+    st.caption('Lecture page par page et affichage des libellés, montants candidats et preuves. Aucun chiffre n’est automatiquement certifié ni enregistré.')
+    from brvm_catalog import catalog
+    from auto_financials import download_pdf
+    from brvm_pdf_audit import extract_candidates
+    documents=st.session_state.get(f'catalog-{selected}')
+    if not documents:
+        st.info('Lancer d’abord la recherche dans Catalogue documentaire pour cette société.')
+    else:
+        pdfs=[d for d in documents[0] if d.get('PDF') and d.get('Période') in ('ANNUEL','T1','S1','T3')]
+        if not pdfs: st.warning('Aucun lien PDF à analyser dans le catalogue.')
+        else:
+            options=list(range(len(pdfs)))
+            choice=st.selectbox('Rapport à examiner',options,format_func=lambda i:f"{pdfs[i]['Année']} · {pdfs[i]['Période']} · {pdfs[i]['Titre'][:110]}")
+            chosen=pdfs[choice]
+            st.write('Source :',chosen['URL'])
+            if st.button('Lire le PDF et contrôler les chiffres',type='primary'):
+                try:
+                    with st.spinner('Lecture et audit du PDF…'):
+                        raw=download_pdf(chosen['URL'])
+                        if len(raw)>25*1024*1024:raise ValueError('PDF supérieur à 25 Mo')
+                        found,diagnostic=extract_candidates(raw,chosen['Titre'],chosen['Période'])
+                        st.session_state[f'audit-{selected}']=(chosen,found,diagnostic)
+                except Exception as exc:st.error(f'Audit PDF : {type(exc).__name__}: {exc}')
+            result=st.session_state.get(f'audit-{selected}')
+            if result:
+                source,found,diagnostic=result
+                st.write('Rapport audité :',source['Titre'])
+                c1,c2,c3=st.columns(3)
+                c1.metric('Pages',diagnostic['pages'])
+                c2.metric('Pages avec texte',diagnostic['pages_with_text'])
+                c3.metric('Libellés candidats',diagnostic['candidates'])
+                for note in diagnostic['notes']:st.warning(note)
+                if found:
+                    st.dataframe(pd.DataFrame(found),hide_index=True,use_container_width=True)
+                    st.download_button('Exporter les preuves CSV',pd.DataFrame(found).to_csv(index=False).encode('utf-8-sig'),f'audit_pdf_{selected}.csv','text/csv')
+                else:st.warning('Aucun libellé reconnu. Vérifier le document et sa qualité texte.')
+                st.info('La présence de chiffres candidats ne démontre pas leur exactitude. Vérifier unités, colonnes N/N-1, périodes et états consolidés avant validation.')
+with tabs[4]:
     st.write('Import CSV de valeurs vérifiées dans les publications, ou pré-extraction d’un PDF natif. Toute valeur importée reste en attente de validation.')
     st.download_button('Télécharger le modèle CSV',open(os.path.join(os.path.dirname(__file__),'modele_import.csv'),'rb').read(),'modele_import.csv')
     csvfile=st.file_uploader('Importer un CSV',type='csv',key='csv')
@@ -107,7 +146,7 @@ with tabs[3]:
         n,errors=stage(db,st.session_state['pdf_rows'])
         st.success(f'{n} lignes en attente de validation')
         for err in errors:st.warning(err)
-with tabs[4]:
+with tabs[5]:
     pending=[r for r in records(db,selected) if r['status']=='a_verifier']
     if not pending:st.info('Aucune valeur en attente pour ce titre.')
     for r in pending:
@@ -116,7 +155,7 @@ with tabs[4]:
             st.warning('Comparer avec le PDF officiel avant de valider.')
             if st.button('J’ai vérifié cette valeur dans la source',key=f"ok-{r['symbol']}-{r['year']}-{r['metric']}"):
                 approve(db,r['symbol'],r['year'],r['metric']);st.rerun()
-with tabs[5]:
+with tabs[6]:
     st.dataframe(pd.DataFrame(coverage(db,symbols)),hide_index=True,use_container_width=True)
     st.caption('La couverture mesure uniquement les valeurs validées. Une valeur absente n’est jamais assimilée à zéro.')
     st.download_button('Exporter les données vérifiées',pd.DataFrame(records(db,verified_only=True)).to_csv(index=False).encode('utf-8-sig'),'brvm_financials_verified.csv','text/csv')
