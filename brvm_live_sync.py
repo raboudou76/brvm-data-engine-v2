@@ -1,5 +1,6 @@
 """Live BRVM discovery, cautious extraction, and staging. Never auto-approve."""
 from brvm_financial_sync import find_reports,parse_report
+from brvm_catalog import annual_pdf_reports
 from auto_financials import download_pdf
 from brvm_sync import fetch_dividends
 from brvm_registry import identities,norm
@@ -9,10 +10,14 @@ import math
 MAX_PDF_BYTES=25*1024*1024
 
 def synchronize(db,symbol,max_reports=6,financial_pages=5,dividend_pages=12):
-    diag={'reports_found':0,'pdf_read':0,'pdf_failed':0,'financial_rows':0,'dividend_rows':0,'staged':0,'errors':[],'report_details':[]}
+    diag={'reports_found':0,'pdf_read':0,'pdf_failed':0,'financial_rows':0,'dividend_rows':0,'staged':0,'errors':[],'report_details':[],'catalog_diagnostic':{}}
     staged=[]
     try:
-        reports=find_reports(symbol,pages=financial_pages)
+        reports, catalog_diag=annual_pdf_reports(symbol,pages=financial_pages)
+        diag['catalog_diagnostic']=catalog_diag
+        if not reports:
+            diag['errors'].append('Catalogue officiel : aucun PDF annuel direct trouvé; recherche de secours activée.')
+            reports=find_reports(symbol,pages=financial_pages)
         diag['reports_found']=len(reports)
         for r in reports[:max_reports]:
             try:
