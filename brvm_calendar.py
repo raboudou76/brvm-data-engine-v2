@@ -1,42 +1,102 @@
-"""Official BRVM dividend calendar fallback; PDF is parsed at runtime, not a static financial dataset."""
+"""BRVM issuer publication catalogue, independent of financial parsing.
+Only official BRVM pages; no third-party scraping or fabricated data.
+"""
 import re
-from datetime import datetime,timezone
-import pandas as pd
-import requests
-import fitz
-from brvm_registry import norm,identities
-from auto_financials import safe_url
+from urllib.parse import urljoin, urlparse
+from bs4 import BeautifulSoup
+from auto_financials import BASE, get_html, safe_url
+from brvm_registry import identities, norm
 
-CALENDARS=[
- 'https://www.brvm.org/sites/default/files/20261009_-_calendrier_de_paiement_des_dividendes_-_exercice_2025.pdf',
-]
+ROOT = BASE + '/fr/rapports-societe-cotes/'
+DIRECT = {
+    'SMBC': 'smb', 'SGBC': 'sgci', 'BOAB': 'bank-africa-bn',
+    'CBIBF': 'coris-bank-international', 'BOABF': 'bank-africa-bf',
+    'BOAC': 'bank-africa-ci', 'BOAM': 'bank-africa-ml',
+    'BOAN': 'bank-africa-ng', 'BOAS': 'bank-africa-sn',
+}
 
-def _number(value):
-    s=str(value).replace('\u202f','').replace('\xa0','').replace(' ','').replace(',','.')
-    m=re.search(r'\d+(?:\.\d+)?',s)
-    return float(m.group()) if m else None
+def classify(title):
+    t=norm(title)
+    if '3e trimestre' in t or '3eme trimestre' in t or 'troisieme trimestre' in t or re.search(r'\bt3\b',t): return 'T3'
+    if '1er trimestre' in t or 'premier trimestre' in t or re.search(r'\bt1\b',t): return 'T1'
+    if 'semestre' in t or 'semestriel' in t or re.search(r'\bs1\b',t): return 'S1'
+    if any(x in t for x in ('etats financiers','etat financier','rapport annuel','annuel','exercice','comptes annuels','rapport des commissaires aux comptes')): return 'ANNUEL'
+    return 'AUTRE'
 
-def calendar_for_issuer(symbol,name='',urls=None):
-    """Only exact issuer aliases in a named calendar row; 2025 is fiscal year, not payment year."""
-    allowed={norm(x) for x in identities(symbol,name)['aliases']}
-    rows=[];errors=[]
-    for url in (urls if urls is not None else CALENDARS):
-        if not safe_url(url):continue
-        try:
-            r=requests.get(url,timeout=25,headers={'User-Agent':'Mozilla/5.0'});r.raise_for_status()
-            if not r.content.startswith(b'%PDF-'):raise ValueError('Réponse non PDF')
-            doc=fitz.open(stream=r.content,filetype='pdf')
-            text='\n'.join(p.get_text(sort=True) for p in doc)
-            # Prefer PDF table extraction via line-level matching; fail closed if a row is ambiguous.
-            lines=[x.strip() for x in text.splitlines() if x.strip()]
-            for i,line in enumerate(lines):
-                for alias in allowed:
-                    if len(alias)<4 or norm(line)!=alias:continue
-                    nearby=lines[i+1:i+4]
-                    amount=_number(nearby[0]) if nearby else None
-                    if amount is None or amount>100000:continue
-                    rows.append({'Société':line,'Année':2025,'Dividende net BRVM':amount,
-                                 'Unité publiée':nearby[0],'Date de paiement':'',
-                                 'Date ex-dividende':'','Source':url})
-        except Exception as exc:errors.append(f'{type(exc).__name__}: {str(exc)[:120]}')
-    return pd.DataFrame(rows).drop_duplicates(subset=['Année','Dividende net BRVM']) if rows else pd.DataFrame(),errors
+def extract_year(title):
+    years=re.findall(r'(?<!\d)(20\d{2})(?!\d)',title)
+    return int(years[-1]) if years else None
+
+def _publication_rows(soup,source):
+    rows=[]
+    # Drupal issuer tables: PDF link is generally labelled "Télécharger".
+    for tr in soup.select('tr'):
+        text=re.sub(r'\s+',' ',tr.get_text(' ',strip=True)).strip()
+        if not text or text.lower().startswith(('type','description','titre')): continue
+        period=classify(text)
+        if period=='AUTRE': continue
+        links=[urljoin(source,a['href']) for a in tr.select('a[href]')]
+        links=[u for u in links if safe_url(u)]
+        if not links: continue
+        pdfs=[u for u in links if re.search(r'\.pdf(?:$|\?)',u,re.I)]
+        details=[u for u in links if u not in pdfs and u.split('#')[0]!=source.split('#')[0] and '/rapports-societe-cotes/' not in u]
+        for u in pdfs or details[:1]:
+            rows.append({'Titre':text.replace('Télécharger','').strip(),'Année':extract_year(text),
+                         'Période':period,'URL':u,'PDF':bool(u in pdfs),'Page source':source})
+    # Some templates use views-row containers rather than tables.
+    if not rows:
+        for block in soup.select('.views-row, article'):
+            text=re.sub(r'\s+',' ',block.get_text(' ',strip=True)).strip()
+            period=classify(text)
+            if period=='AUTRE':continue
+            for a in block.select('a[href]'):
+                u=urljoin(source,a['href'])
+                if safe_url(u) and (re.search(r'\.pdf(?:$|\?)',u,re.I) or '/fr/' in u):
+                    rows.append({'Titre':text.replace('Télécharger','').strip()[:250],'Année':extract_year(text),
+                                 'Période':period,'URL':u,'PDF':bool(re.search(r'\.pdf(?:$|\?)',u,re.I)),'Page source':source})
+                    break
+    return rows
+
+def catalog(symbol,pages=3,include_details=True):
+    """Return (documents, diagnostic); never hides failed HTTP requests."""
+    symbol=str(symbol).upper().strip()
+    slugs=list(dict.fromkeys([DIRECT.get(symbol)]+identities(symbol)['slugs']))
+    slugs=[s for s in slugs if s]
+    diag={'symbol':symbol,'pages':[],'errors':[],'documents_found':0,'pdf_links':0}
+    found={}
+    for slug in slugs:
+        for page in range(max(1,min(int(pages),8))):
+            url=ROOT+slug+(f'?page={page}' if page else '')
+            try:
+                soup=get_html(url)
+                items=_publication_rows(soup,url)
+                diag['pages'].append({'URL':url,'Statut':'HTTP 200','Documents':len(items)})
+            except Exception as exc:
+                diag['pages'].append({'URL':url,'Statut':type(exc).__name__,'Documents':0})
+                diag['errors'].append(f'{url} : {type(exc).__name__}: {str(exc)[:150]}')
+                break
+            for item in items:
+                if not item['PDF'] and include_details:
+                    try:
+                        detail=get_html(item['URL'])
+                        pdfs=[urljoin(item['URL'],a['href']) for a in detail.select('a[href]')]
+                        pdfs=[u for u in pdfs if safe_url(u) and re.search(r'\.pdf(?:$|\?)',u,re.I)]
+                        if pdfs:
+                            for pdf in pdfs:
+                                record=dict(item,URL=pdf,PDF=True,**{'Page source':item['URL']})
+                                found[pdf]=record
+                            continue
+                    except Exception as exc:
+                        diag['errors'].append(f"Détail {item['URL']} : {type(exc).__name__}: {str(exc)[:100]}")
+                found[item['URL']]=item
+            # First valid issuer page is authoritative; avoid unnecessary alternative slugs.
+            if page==0 and not items: continue
+        if found:break
+    documents=sorted(found.values(),key=lambda x:(x['Année'] or 0,x['Période'],x['Titre']),reverse=True)
+    diag['documents_found']=len(documents)
+    diag['pdf_links']=sum(bool(x['PDF']) for x in documents)
+    return documents,diag
+
+def annual_pdf_reports(symbol,pages=3):
+    documents,diag=catalog(symbol,pages)
+    return [{'Titre':d['Titre'],'Contexte':symbol,'URL':d['URL'],'PDF':True,'Page source':d['Page source']} for d in documents if d['Période']=='ANNUEL' and d['PDF']],diag
