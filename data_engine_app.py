@@ -15,7 +15,7 @@ symbols=['SMBC','SGBC','BOAB','CBIBF']
 for r in db.execute('SELECT DISTINCT symbol FROM financials'):
     if r['symbol'] not in symbols:symbols.append(r['symbol'])
 selected=st.selectbox('Société',symbols)
-tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4.1','Importer les rapports','Validation','Contrôle qualité','Pipeline V2.5.0','Extraction hybride V2.5.1','Réconciliation V2.5.2'])
+tabs=st.tabs(['Historique vérifié','Synchronisation BRVM','Catalogue documentaire','Audit PDF V2.4.1','Importer les rapports','Validation','Contrôle qualité','Pipeline V2.5.0','Extraction hybride V2.5.1','Réconciliation V2.5.2','Consolidation V2.5.3'])
 with tabs[0]:
     rs=records(db,selected,True)
     if not rs: st.info('Aucune donnée encore vérifiée pour cette société.')
@@ -386,3 +386,36 @@ with tabs[9]:
                 st.download_button('Exporter audit V2.5.2 CSV',df_v252.to_csv(index=False).encode('utf-8-sig'),f'audit_v252_{selected}.csv','text/csv',key='v252_export')
                 st.warning('Tous les montants sont NON CERTIFIÉS : vérifier les années, unités et colonnes sur le PDF officiel.')
     except Exception as exc:st.error(f'Archives V2.5.0 indisponibles : {type(exc).__name__}: {exc}')
+
+with tabs[10]:
+    st.subheader('V2.5.3 — Consolidation OCR et audit des fragments')
+    st.caption('Lecture seule : les reconstitutions sont des hypothèses. Aucune écriture en base ni synchronisation BRVM RADAR.')
+    from brvm_v253_consolidate import run_v253
+    from brvm_hybrid_extractor import archived_documents as archived_v253
+    try:
+        docs_v253=[d for d in archived_v253(selected) if d.get('stored_path')]
+        if not docs_v253:
+            st.info('Aucun PDF archivé : lancer le Pipeline V2.5.0.')
+        else:
+            ix=st.selectbox('Rapport archivé à contrôler',range(len(docs_v253)),
+                            format_func=lambda i: f"{docs_v253[i].get('fiscal_year')} · {docs_v253[i].get('period')} · {docs_v253[i]['title']}",key='v253_doc')
+            pages=st.slider('Pages maximales à analyser',1,30,8,key='v253_pages')
+            if st.button('Consolider les montants OCR V2.5.3',key='v253_run'):
+                with st.spinner('Reconstruction et déduplication prudente…'):
+                    try:st.session_state[f'v253_{selected}_{docs_v253[ix]["id"]}']=run_v253(docs_v253[ix],pages)
+                    except Exception as exc:st.error(f'V2.5.3 : {type(exc).__name__}: {exc}')
+            result=st.session_state.get(f'v253_{selected}_{docs_v253[ix]["id"]}')
+            if result:
+                a,b,c=st.columns(3)
+                a.metric('Candidats retenus pour revue',len(result['candidates']))
+                b.metric('Fragments écartés de la vue',len(result['fragments']))
+                c.metric('Reconstitutions hypothétiques',result['inferred_count'])
+                if result['errors']:st.warning('Diagnostics : '+' | '.join(result['errors']))
+                fields=['indicator','fiscal_year_proposed','raw_amount','numeric_candidate','unit_detected','page_pdf','extraction_method','review_reason','warning']
+                df=pd.DataFrame(result['candidates'])
+                st.dataframe(df[[x for x in fields if x in df.columns]],hide_index=True,use_container_width=True)
+                st.download_button('Exporter candidats V2.5.3 CSV',df.to_csv(index=False).encode('utf-8-sig'),f'audit_v253_{selected}.csv','text/csv',key='v253_export')
+                with st.expander('Fragments écartés de la vue principale (conservés pour audit)'):
+                    st.dataframe(pd.DataFrame(result['fragments']),hide_index=True,use_container_width=True)
+                st.warning('Aucun montant ni exercice n’est certifié. Vérifier les valeurs reconstituées, les en-têtes N/N-1 et les unités sur le PDF.')
+    except Exception as exc:st.error(f'Archives indisponibles : {type(exc).__name__}: {exc}')
