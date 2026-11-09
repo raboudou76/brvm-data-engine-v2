@@ -578,12 +578,12 @@ with tabs[15]:
         st.info('Les valeurs sans exercice attribué sont bloquées. Les ratios nécessitant des données absentes (BPA, PER, dividendes, valorisation) ne sont pas calculés.')
 
 
-# V2.7.1 — Consultation PostgreSQL Supabase (lecture seule)
+# V2.7.2 — Tableau de bord PostgreSQL multi-sociétés (lecture seule)
 st.divider()
-st.header("V2.7.1 — Données financières PostgreSQL")
-st.caption("Consultation persistante Supabase. Les données provisoires et bloquées ne sont jamais certifiées automatiquement.")
+st.header("V2.7.2 — Tableau de bord financier PostgreSQL")
+st.caption("Source : Supabase PostgreSQL. Les données PROVISIONAL ne sont pas certifiées ; BLOCKED est exclu des graphiques et des calculs.")
 
-if st.button("Tester la connexion et charger les données PostgreSQL", key="v271_load"):
+if st.button("Charger les sociétés et les données PostgreSQL", key="v272_load"):
     try:
         import psycopg
         from psycopg.rows import dict_row
@@ -596,35 +596,103 @@ if st.button("Tester la connexion et charger les données PostgreSQL", key="v271
                     cur.execute("SET TRANSACTION READ ONLY")
                     cur.execute("""
                         SELECT c.ticker, c.company_name,
-                               f.fiscal_year, f.standardized_account,
-                               f.amount, f.currency, f.quality_status,
-                               f.raw_amount
-                        FROM public.financial_facts AS f
-                        JOIN public.companies AS c ON c.company_id = f.company_id
-                        WHERE c.ticker = %s
-                        ORDER BY f.fiscal_year NULLS LAST,
-                                 f.standardized_account, f.fact_id
-                    """, (selected,))
-                    pg_rows = cur.fetchall()
-            st.session_state["v271_pg_rows"] = pg_rows
-            st.session_state["v271_pg_symbol"] = selected
-            st.success(f"Connexion PostgreSQL réussie — {len(pg_rows)} observations pour {selected}.")
+                               COUNT(f.fact_id) AS observations
+                        FROM public.companies c
+                        LEFT JOIN public.financial_facts f ON f.company_id = c.company_id
+                        GROUP BY c.company_id, c.ticker, c.company_name
+                        ORDER BY c.ticker
+                    """)
+                    companies272 = cur.fetchall()
+                    cur.execute("""
+                        SELECT c.ticker, c.company_name, f.fact_id, f.fiscal_year,
+                               f.fiscal_period, f.period_basis, f.standardized_account,
+                               f.amount, f.raw_amount, f.currency, f.quality_status,
+                               f.source_page, f.issue, r.report_url
+                        FROM public.financial_facts f
+                        JOIN public.companies c ON c.company_id = f.company_id
+                        LEFT JOIN public.financial_reports r ON r.report_id = f.report_id
+                        ORDER BY c.ticker, f.fiscal_year NULLS LAST, f.fact_id
+                    """)
+                    facts272 = cur.fetchall()
+            st.session_state["v272_companies"] = companies272
+            st.session_state["v272_facts"] = facts272
+            st.success(f"Lecture PostgreSQL réussie : {len(companies272)} sociétés et {len(facts272)} observations.")
     except Exception as exc:
-        # Ne pas exposer les exceptions de connexion : elles peuvent contenir des informations sensibles.
-        st.error(f"Lecture PostgreSQL impossible ({type(exc).__name__}). Vérifier les Secrets et les colonnes du schéma.")
+        st.error(f"Lecture PostgreSQL impossible ({type(exc).__name__}). Vérifier la connexion et le schéma.")
 
-if st.session_state.get("v271_pg_symbol") == selected and "v271_pg_rows" in st.session_state:
-    pg_df = pd.DataFrame(st.session_state["v271_pg_rows"])
-    if pg_df.empty:
-        st.info("Aucune observation PostgreSQL trouvée pour cette société.")
+companies272 = st.session_state.get("v272_companies")
+if companies272 is not None:
+    if not companies272:
+        st.info("Aucune société enregistrée dans PostgreSQL.")
     else:
-        counts = pg_df["quality_status"].value_counts()
-        a, b, c = st.columns(3)
-        a.metric("Observations", len(pg_df))
-        b.metric("Provisoires", int(counts.get("PROVISIONAL", 0)))
-        c.metric("Bloquées", int(counts.get("BLOCKED", 0)))
-        st.dataframe(pg_df, hide_index=True, use_container_width=True)
-        st.download_button("Exporter les observations PostgreSQL (CSV)",
-                           pg_df.to_csv(index=False).encode("utf-8-sig"),
-                           f"postgresql_{selected}_v271.csv", "text/csv", key="v271_export")
-        st.warning("Données non certifiées : vérifier la devise, le facteur d'échelle, les années et les montants avec les PDF officiels. Les lignes BLOCKED ne doivent pas alimenter les calculs.")
+        catalog272 = pd.DataFrame(companies272)
+        st.subheader("Couverture des sociétés")
+        st.dataframe(catalog272, hide_index=True, use_container_width=True)
+        st.caption("Une société sans observations est affichée dans le catalogue, mais aucun chiffre n'est inventé.")
+        names272 = {str(x["ticker"]): str(x["company_name"] or x["ticker"]) for x in companies272}
+        tickers272 = list(names272)
+        index272 = tickers272.index(selected) if selected in tickers272 else 0
+        chosen272 = st.selectbox("Société PostgreSQL", tickers272, index=index272,
+                                  format_func=lambda t: f"{t} — {names272[t]}", key="v272_ticker")
+        all272 = pd.DataFrame(st.session_state.get("v272_facts", []))
+        df272 = all272[all272["ticker"] == chosen272].copy() if not all272.empty else pd.DataFrame()
+        if df272.empty:
+            st.info("Aucune observation financière enregistrée pour cette société.")
+        else:
+            counts272 = df272["quality_status"].value_counts()
+            ca, cb, cc, cd = st.columns(4)
+            ca.metric("Observations", len(df272))
+            cb.metric("Provisoires", int(counts272.get("PROVISIONAL", 0)))
+            cc.metric("Bloquées", int(counts272.get("BLOCKED", 0)))
+            cd.metric("Validées", int(counts272.get("VALIDATED", 0)))
+            st.subheader("Historique financier — valeurs non certifiées identifiées")
+            annual272 = df272[
+                df272["quality_status"].isin(["PROVISIONAL", "VALIDATED"])
+                & df272["fiscal_year"].notna()
+                & df272["amount"].notna()
+                & df272["fiscal_period"].eq("ANNUEL")
+                & df272["period_basis"].eq("REPORTED")
+                & df272["currency"].eq("XOF")
+            ].copy()
+            if annual272.empty:
+                st.info("Aucune donnée annuelle XOF admissible à la visualisation.")
+            else:
+                annual272["fiscal_year"] = annual272["fiscal_year"].astype(int)
+                annual272["amount_milliards"] = pd.to_numeric(annual272["amount"], errors="coerce") / 1_000_000_000
+                # Écarter les couples année/indicateur ambigus plutôt que choisir arbitrairement une valeur.
+                dup272 = annual272.duplicated(["fiscal_year", "standardized_account"], keep=False)
+                if dup272.any():
+                    st.warning("Certaines années/indicateurs ont plusieurs observations : exclus des graphiques et taux de croissance jusqu'à réconciliation.")
+                plot272 = annual272.loc[~dup272].copy()
+                labels272 = {"PNB": "Produit net bancaire", "NET_INCOME": "Résultat net",
+                             "OPERATING_INCOME": "Résultat d'exploitation", "REVENUE": "Chiffre d'affaires",
+                             "EQUITY": "Capitaux propres"}
+                metrics272 = sorted(plot272["standardized_account"].dropna().unique())
+                for metric272 in metrics272:
+                    data272 = plot272[plot272["standardized_account"] == metric272].sort_values("fiscal_year")
+                    if data272.empty:
+                        continue
+                    st.markdown(f"#### {labels272.get(metric272, metric272)}")
+                    st.bar_chart(data272.set_index("fiscal_year")["amount_milliards"],
+                                 y_label="Milliards FCFA", x_label="Exercice")
+                    display272 = data272[["fiscal_year", "amount_milliards", "quality_status"]].rename(
+                        columns={"fiscal_year": "Exercice", "amount_milliards": "Milliards FCFA", "quality_status": "Statut"})
+                    st.dataframe(display272, hide_index=True, use_container_width=True)
+                    if len(data272) > 1:
+                        data272 = data272.copy()
+                        data272["annee_precedente"] = data272["fiscal_year"].shift(1)
+                        data272["croissance"] = data272["amount_milliards"].pct_change(fill_method=None) * 100
+                        valid272 = data272[
+                            (data272["fiscal_year"] - data272["annee_precedente"] == 1)
+                            & (data272["amount_milliards"].shift(1) != 0)
+                            & data272["croissance"].notna()
+                        ]
+                        if not valid272.empty:
+                            st.caption("Variation annuelle indicative (valeurs non certifiées) : " +
+                                       " ; ".join(f"{int(r.fiscal_year)} : {r.croissance:+.2f} %" for r in valid272.itertuples()))
+            st.subheader("Audit et traçabilité des observations")
+            st.dataframe(df272, hide_index=True, use_container_width=True)
+            st.download_button("Exporter les observations PostgreSQL (CSV)",
+                               df272.to_csv(index=False).encode("utf-8-sig"),
+                               f"postgresql_{chosen272}_v272.csv", "text/csv", key="v272_export")
+            st.warning("Les données PROVISIONAL restent à confronter aux rapports officiels. Les données BLOCKED et les observations ambiguës ne servent jamais aux graphiques ni à la croissance. Aucun transfert automatique vers les scores ou valorisations.")
