@@ -1057,3 +1057,44 @@ else:
         st.warning("Au moins une observation est absente, en double ou différente. Ne pas valider avant correction.")
 st.warning("Résultat net 2025 : la synthèse indique 13 075 millions FCFA ; le projet d'affectation donne 13 075 215 062 FCFA. Ce sont deux niveaux de précision différents. Conserver PROVISIONAL tant que la politique de précision n'est pas décidée.")
 st.download_button("Exporter le dossier de contrôle V2.7.8 (CSV)",check278.to_csv(index=False).encode("utf-8-sig"),"controle_SMBC_V278.csv","text/csv",key="v278_review")
+
+
+# V2.7.9 — Suivi de validation documentaire avec précision explicite (lecture seule)
+st.divider()
+st.header("V2.7.9 — Validation contrôlée SMB et précision des montants")
+st.caption("Les chiffres de synthèse sont arrondis au million FCFA. Cette interface ne modifie pas PostgreSQL : exécuter séparément le script SQL contrôlé.")
+st.link_button("Rapport officiel SMB 2025", source277)
+current279 = pd.DataFrame(st.session_state.get("v272_facts", []))
+if current279.empty:
+    st.info("Charger les données PostgreSQL dans la section V2.7.2 avant ce contrôle.")
+else:
+    current279 = current279[current279["ticker"].astype(str).eq("SMBC")].copy()
+    expected279 = {(int(y), str(a)): int(m) * 1000000 for y, a, m in source278}
+    audit279 = []
+    for (year279, account279), value279 in expected279.items():
+        found279 = current279[(current279["fiscal_year"].astype(str) == str(year279)) & (current279["standardized_account"].astype(str) == account279)]
+        unique279 = len(found279) == 1
+        row279 = found279.iloc[0] if unique279 else None
+        try:
+            amount279 = int(row279["amount"]) if unique279 else None
+        except (ValueError, TypeError):
+            amount279 = None
+        audit279.append({"exercice": year279, "compte": account279, "montant_publie_arrondi_fcfa": value279,
+                         "montant_postgresql_fcfa": amount279, "correspondance": unique279 and amount279 == value279,
+                         "statut": str(row279["quality_status"]) if unique279 else "ABSENT_OU_DOUBLON",
+                         "page_pdf": 1, "precision": "ROUNDED_MILLION", "source": source277})
+    df279 = pd.DataFrame(audit279)
+    a279, b279, c279 = st.columns(3)
+    a279.metric("Correspondances", f"{int(df279['correspondance'].sum())}/8")
+    b279.metric("VALIDATED", int((df279["statut"] == "VALIDATED").sum()))
+    c279.metric("À examiner", int((df279["statut"] != "VALIDATED").sum()))
+    st.dataframe(df279, hide_index=True, use_container_width=True)
+    st.download_button("Exporter le contrôle V2.7.9 (CSV)", df279.to_csv(index=False).encode("utf-8-sig"),
+                       "controle_SMBC_V279.csv", "text/csv", key="v279_export")
+    if bool(df279["correspondance"].all()) and bool((df279["statut"] == "VALIDATED").all()):
+        st.success("Les huit valeurs publiées arrondies sont présentes et VALIDATED. La précision reste limitée au million FCFA.")
+    elif bool(df279["correspondance"].all()):
+        st.info("Les huit montants correspondent. Exécuter le script SQL V2.7.9 dans Supabase après sauvegarde et vérification de la source.")
+    else:
+        st.error("Écart ou doublon détecté : ne pas exécuter la promotion sans réconciliation.")
+st.warning("Le résultat net 2025 exact mentionné dans le projet d'affectation (13 075 215 062 FCFA) n'est pas interchangeable avec la valeur arrondie de synthèse (13 075 millions FCFA). Ne pas remplacer silencieusement le montant stocké.")
