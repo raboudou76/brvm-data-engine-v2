@@ -967,3 +967,93 @@ if up276 is not None:
             st.info("Précontrôle uniquement : aucune société, aucun rapport et aucune observation n'ont été créés dans PostgreSQL.")
     except Exception as exc:
         st.error(f"Impossible de lire le CSV ({type(exc).__name__}). Vérifier l'encodage et le séparateur.")
+
+
+# V2.7.7 — Deuxième société SMBC : dossier documentaire et contrôle de préparation
+st.divider()
+st.header("V2.7.7 — Deuxième société pilote : SMB Côte d’Ivoire (SMBC)")
+st.caption("Dossier de préparation, lecture seule. Les montants de synthèse sont publiés en millions FCFA, donc arrondis ; ils restent PROVISIONAL après insertion.")
+source277 = "https://www.brvm.org/sites/default/files/20260512_-_etats_financiers_et_projet_daffectation_du_resultat_-_exercice_2025_-_smb_ci.pdf"
+st.link_button("Ouvrir les états financiers officiels SMB 2025", source277)
+metrics277 = {"REVENUE":"Chiffre d'affaires", "OPERATING_INCOME":"Résultat d'exploitation", "NET_INCOME":"Résultat net", "EQUITY":"Capitaux propres"}
+values277 = {2024:{"REVENUE":229061,"OPERATING_INCOME":12036,"NET_INCOME":8698,"EQUITY":35294},2025:{"REVENUE":206740,"OPERATING_INCOME":17828,"NET_INCOME":13075,"EQUITY":42913}}
+rows277=[]
+for year277, entries277 in values277.items():
+    for code277, value277 in entries277.items():
+        rows277.append({"ticker":"SMBC", "company_name":"Société Multinationale de Bitumes Côte d'Ivoire", "fiscal_year":year277,
+                        "fiscal_period":"ANNUEL", "period_basis":"REPORTED", "standardized_account":code277,
+                        "amount":value277*1000000, "currency":"XOF", "source_page":"", "report_url":source277,
+                        "quality_status":"PROVISIONAL", "evidence":f"Etats financiers 2025, colonne {year277}; valeur publiée {value277} millions FCFA, arrondie"})
+reference277 = pd.DataFrame(rows277)
+st.subheader("Référentiel des 8 observations à importer")
+view277 = reference277.copy()
+view277.insert(5,"Indicateur",view277["standardized_account"].map(metrics277))
+st.dataframe(view277[["fiscal_year","Indicateur","amount","currency","quality_status","evidence"]], hide_index=True, use_container_width=True)
+st.download_button("Télécharger le CSV SMBC V2.7.7", reference277.to_csv(index=False).encode("utf-8-sig"), "SMBC_pilote_V277.csv", "text/csv", key="v277_csv")
+latest277 = pd.DataFrame(st.session_state.get("v272_facts", []))
+if latest277.empty:
+    st.info("Pour vérifier l'insertion, charger d'abord les données PostgreSQL dans la section V2.7.2.")
+else:
+    current277 = latest277[latest277["ticker"].astype(str).eq("SMBC")].copy()
+    st.metric("Observations SMBC présentes en PostgreSQL (dernière lecture)", len(current277))
+    if current277.empty:
+        st.info("SMBC n'est pas encore alimentée. Exécuter le script SQL de pré-import dans Supabase après sauvegarde et vérification.")
+    else:
+        st.dataframe(current277[["fiscal_year","standardized_account","amount","quality_status","source_page"]], hide_index=True, use_container_width=True)
+        expected277 = {(int(r["fiscal_year"]),r["standardized_account"],int(r["amount"])) for r in rows277}
+        actual277 = set()
+        for _,r in current277.iterrows():
+            try: actual277.add((int(r["fiscal_year"]),str(r["standardized_account"]),int(r["amount"])))
+            except (TypeError,ValueError): pass
+        if expected277.issubset(actual277):
+            st.success("Les huit valeurs attendues sont présentes. Vérifier le statut PROVISIONAL et les pièces avant validation.")
+        else:
+            st.warning("Certaines valeurs attendues sont absentes ou différentes : revue manuelle requise.")
+st.warning("Attention : le résultat net exact 2025 figure aussi dans le projet d'affectation du résultat (13 075 215 062 FCFA). Ne pas confondre cette précision avec les montants arrondis du tableau de synthèse. Aucune validation automatique.")
+
+
+# V2.7.8 — Revue documentaire SMB (lecture seule)
+st.divider()
+st.header("V2.7.8 — Validation documentaire SMB")
+st.caption("Référence officielle : états financiers de synthèse 2025, page PDF 1. Les chiffres du tableau sont en MILLIONS FCFA (arrondis). Aucun changement de statut automatique.")
+st.link_button("Consulter le rapport officiel SMB", source277)
+source278 = [
+    (2024,"REVENUE",229061),(2024,"OPERATING_INCOME",12036),(2024,"NET_INCOME",8698),(2024,"EQUITY",35294),
+    (2025,"REVENUE",206740),(2025,"OPERATING_INCOME",17828),(2025,"NET_INCOME",13075),(2025,"EQUITY",42913)
+]
+rows278=[]
+observed278 = pd.DataFrame(st.session_state.get("v272_facts", []))
+if not observed278.empty:
+    observed278 = observed278[observed278["ticker"].astype(str).eq("SMBC")].copy()
+for y278,a278,m278 in source278:
+    match278 = pd.DataFrame()
+    if not observed278.empty:
+        match278=observed278[(observed278["fiscal_year"].astype(str)==str(y278)) & (observed278["standardized_account"].astype(str)==a278)]
+    db278 = None
+    stat278 = "ABSENT"
+    fid278 = ""
+    if len(match278)==1:
+        r278=match278.iloc[0]
+        fid278=str(r278["fact_id"])
+        stat278=str(r278["quality_status"])
+        try: db278=int(r278["amount"])
+        except (ValueError,TypeError): pass
+    expected278=m278*1000000
+    rows278.append({"fact_id":fid278,"ticker":"SMBC","exercice":y278,"compte":a278,
+                    "montant_publie_millions":m278,"montant_stocke_fcfa":db278,
+                    "concordance_arrondie":len(match278)==1 and db278==expected278,
+                    "page_pdf":1,"statut_postgresql":stat278,
+                    "precision":"arrondi au million FCFA"})
+check278=pd.DataFrame(rows278)
+st.subheader("Contrôle des huit observations")
+st.dataframe(check278,hide_index=True,use_container_width=True)
+if observed278.empty:
+    st.info("Charger les données PostgreSQL dans la section V2.7.2 pour activer la comparaison.")
+else:
+    st.metric("Concordances avec les montants publiés",int(check278["concordance_arrondie"].sum()))
+    if bool(check278["concordance_arrondie"].all()):
+        st.success("8 concordances sur 8 aux montants ARRONDIS publiés. Cela ne prouve pas une précision à l'unité FCFA.")
+    else:
+        st.warning("Au moins une observation est absente, en double ou différente. Ne pas valider avant correction.")
+st.warning("Résultat net 2025 : la synthèse indique 13 075 millions FCFA ; le projet d'affectation donne 13 075 215 062 FCFA. Ce sont deux niveaux de précision différents. Conserver PROVISIONAL tant que la politique de précision n'est pas décidée.")
+st.download_button("Exporter le dossier de contrôle V2.7.8 (CSV)",check278.to_csv(index=False).encode("utf-8-sig"),"controle_SMBC_V278.csv","text/csv",key="v278_review")
