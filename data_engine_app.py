@@ -696,3 +696,81 @@ if companies272 is not None:
                                df272.to_csv(index=False).encode("utf-8-sig"),
                                f"postgresql_{chosen272}_v272.csv", "text/csv", key="v272_export")
             st.warning("Les données PROVISIONAL restent à confronter aux rapports officiels. Les données BLOCKED et les observations ambiguës ne servent jamais aux graphiques ni à la croissance. Aucun transfert automatique vers les scores ou valorisations.")
+
+# V2.7.3 — Revue documentaire et dossier de validation (sans écriture en base)
+st.header("V2.7.3 — Revue documentaire des observations")
+st.caption("Comparer chaque observation au PDF officiel. Les conclusions sont exportées pour audit ; aucun statut PostgreSQL n'est modifié automatiquement.")
+review_facts273 = pd.DataFrame(st.session_state.get("v272_facts", []))
+if review_facts273.empty:
+    st.info("Charger d'abord les sociétés et observations avec le bouton V2.7.2 ci-dessus.")
+else:
+    review_tickers273 = sorted(review_facts273["ticker"].dropna().astype(str).unique().tolist())
+    review_ticker273 = st.selectbox("Société à contrôler", review_tickers273, key="v273_ticker")
+    review_df273 = review_facts273[
+        (review_facts273["ticker"] == review_ticker273)
+        & (review_facts273["quality_status"] == "PROVISIONAL")
+    ].copy()
+    st.metric("Observations provisoires à examiner", len(review_df273))
+    if review_df273.empty:
+        st.info("Aucune observation provisoire à contrôler pour cette société.")
+    else:
+        review_df273 = review_df273.sort_values("fact_id")
+        review_ids273 = review_df273["fact_id"].astype(int).tolist()
+        review_id273 = st.selectbox("Observation à examiner", review_ids273,
+            format_func=lambda fid: (
+                f"#{fid} · " + str(review_df273.loc[review_df273['fact_id'] == fid, 'standardized_account'].iloc[0])
+                + " · " + str(review_df273.loc[review_df273['fact_id'] == fid, 'fiscal_year'].iloc[0])
+            ), key="v273_fact")
+        fact273 = review_df273[review_df273["fact_id"] == review_id273].iloc[0]
+        st.write("**Indicateur :**", fact273["standardized_account"])
+        st.write("**Exercice proposé :**", fact273["fiscal_year"])
+        st.write("**Montant proposé (FCFA) :**", str(fact273["amount"]))
+        st.write("**Page indiquée :**", fact273.get("source_page"))
+        source273 = fact273.get("report_url")
+        if pd.notna(source273) and str(source273).startswith("https://"):
+            st.link_button("Ouvrir le rapport officiel pour vérification", str(source273))
+        else:
+            st.error("URL officielle manquante : la revue ne peut pas être conclue.")
+        st.warning("La présence d'un lien ne prouve pas l'exactitude des chiffres. Contrôler directement les tableaux, les en-têtes N/N-1 et l'unité affichée dans le PDF.")
+        with st.form("v273_review_form", clear_on_submit=True):
+            reviewer273 = st.text_input("Nom du vérificateur")
+            page273 = st.text_input("Page PDF réellement vérifiée")
+            year273 = st.checkbox("Exercice et colonne N/N-1 confirmés dans le PDF")
+            value273 = st.checkbox("Montant et signe comparés visuellement au PDF")
+            unit273 = st.checkbox("Devise et facteur d'échelle explicitement vérifiés")
+            scope273 = st.checkbox("Périmètre et période (annuel, individuel/consolidé) confirmés")
+            conclusion273 = st.selectbox("Conclusion de la revue", ["À revoir", "Concordance documentaire", "Écart constaté"])
+            notes273 = st.text_area("Preuve / commentaire / anomalie")
+            submitted273 = st.form_submit_button("Enregistrer cette revue dans la session")
+        if submitted273:
+            if not reviewer273.strip() or not page273.strip() or not notes273.strip():
+                st.error("Renseigner le vérificateur, la page et une preuve/commentaire.")
+            elif conclusion273 == "Concordance documentaire" and not all([year273, value273, unit273, scope273]):
+                st.error("Une concordance exige la confirmation de tous les contrôles.")
+            elif conclusion273 == "Concordance documentaire" and not (pd.notna(source273) and str(source273).startswith("https://")):
+                st.error("La source officielle doit être disponible.")
+            else:
+                from datetime import datetime, timezone
+                row273 = {
+                    "fact_id": int(review_id273), "ticker": review_ticker273,
+                    "standardized_account": str(fact273["standardized_account"]),
+                    "fiscal_year": str(fact273["fiscal_year"]),
+                    "amount": str(fact273["amount"]), "report_url": str(source273),
+                    "source_page_verified": page273.strip(), "reviewer": reviewer273.strip(),
+                    "year_checked": year273, "amount_checked": value273,
+                    "unit_checked": unit273, "scope_checked": scope273,
+                    "conclusion": conclusion273, "evidence_notes": notes273.strip(),
+                    "reviewed_at_utc": datetime.now(timezone.utc).isoformat(),
+                    "database_status_unchanged": "PROVISIONAL"
+                }
+                st.session_state.setdefault("v273_reviews", {})[int(review_id273)] = row273
+                st.success("Revue conservée dans cette session. Exporter le dossier CSV avant de fermer l'application.")
+    reviewed273 = list(st.session_state.get("v273_reviews", {}).values())
+    if reviewed273:
+        st.subheader("Journal des revues documentaires")
+        audit273 = pd.DataFrame(reviewed273)
+        st.dataframe(audit273, hide_index=True, use_container_width=True)
+        st.download_button("Télécharger le dossier de revue V2.7.3 (CSV)",
+            audit273.to_csv(index=False).encode("utf-8-sig"),
+            "revue_documentaire_v273.csv", "text/csv", key="v273_export")
+    st.info("Étape suivante : après vérification humaine du dossier et mise en place d'un journal d'audit persistant, une procédure séparée pourra autoriser le statut VALIDATED. Cette version ne modifie aucune donnée financière dans PostgreSQL.")
