@@ -774,3 +774,50 @@ else:
             audit273.to_csv(index=False).encode("utf-8-sig"),
             "revue_documentaire_v273.csv", "text/csv", key="v273_export")
     st.info("Étape suivante : après vérification humaine du dossier et mise en place d'un journal d'audit persistant, une procédure séparée pourra autoriser le statut VALIDATED. Cette version ne modifie aucune donnée financière dans PostgreSQL.")
+
+# V2.7.5 — Résolution documentée des observations bloquées (lecture seule)
+st.divider()
+st.header("V2.7.5 — Diagnostic et résolution des anomalies")
+st.caption("BOAB : correspondances identifiées dans le rapport officiel 2025, pages PDF 2 et 4. L'interface ne modifie pas PostgreSQL.")
+source275 = "https://www.brvm.org/sites/default/files/20260415_-_etats_financiers_-_exercice_2025_-_boa_bn.pdf"
+st.link_button("Consulter le rapport officiel BOAB 2025", source275)
+expected275 = pd.DataFrame([
+    {"Compte":"EQUITY", "Montant FCFA":117396355692, "Exercice":2024, "Page PDF":2, "Code source":"RBP_0090"},
+    {"Compte":"EQUITY", "Montant FCFA":117506988771, "Exercice":2025, "Page PDF":2, "Code source":"RBP_0090"},
+    {"Compte":"OPERATING_INCOME", "Montant FCFA":21455499312, "Exercice":2024, "Page PDF":4, "Code source":"RCR_0160"},
+])
+st.subheader("Correspondances documentaires identifiées")
+st.dataframe(expected275, hide_index=True, use_container_width=True)
+all275 = pd.DataFrame(st.session_state.get("v272_facts", []))
+if all275.empty:
+    st.info("Clique d'abord sur « Charger les sociétés et les données PostgreSQL » dans la section V2.7.2.")
+else:
+    boab275 = all275[all275["ticker"] == "BOAB"].copy()
+    blocked275 = boab275[boab275["quality_status"] == "BLOCKED"].copy()
+    st.metric("Observations BOAB encore bloquées (dernière lecture)", len(blocked275))
+    if not blocked275.empty:
+        st.dataframe(blocked275[["fact_id", "standardized_account", "amount", "fiscal_year", "source_page", "quality_status", "issue"]],
+                     hide_index=True, use_container_width=True)
+    expected_pairs275 = {(r["Compte"], int(r["Montant FCFA"])) for _,r in expected275.iterrows()}
+    current_pairs275 = set()
+    for _, r in blocked275.iterrows():
+        try:
+            current_pairs275.add((str(r["standardized_account"]), int(r["amount"])))
+        except (TypeError, ValueError):
+            pass
+    if len(blocked275) == 3 and current_pairs275 == expected_pairs275:
+        st.success("Les trois montants BLOCKED correspondent au dossier de résolution. Exécuter le script SQL séparé après sauvegarde.")
+    elif len(blocked275) == 0:
+        validated275 = boab275[boab275["quality_status"] == "VALIDATED"]
+        found275 = {(str(r["standardized_account"]), int(r["amount"]))
+                    for _,r in validated275.iterrows() if pd.notna(r["amount"])}
+        if expected_pairs275.issubset(found275):
+            st.success("Les trois observations corrigées sont désormais VALIDATED dans les données rechargées.")
+        else:
+            st.warning("Aucune observation BLOCKED, mais les trois montants attendus ne sont pas tous VALIDATED.")
+    else:
+        st.error("État inattendu : ne pas exécuter le script SQL. Examiner les observations et doublons.")
+    st.warning("Après exécution dans Supabase, recharger les données PostgreSQL pour actualiser cet écran. Vérifier aussi les événements d'audit.")
+st.download_button("Exporter le référentiel de correction V2.7.5 (CSV)",
+                   expected275.to_csv(index=False).encode("utf-8-sig"),
+                   "BOAB_referentiel_anomalies_V275.csv", "text/csv", key="v275_reference_csv")
