@@ -577,16 +577,54 @@ with tabs[15]:
             st.dataframe(pd.DataFrame(analytics260),hide_index=True,use_container_width=True)
         st.info('Les valeurs sans exercice attribué sont bloquées. Les ratios nécessitant des données absentes (BPA, PER, dividendes, valorisation) ne sont pas calculés.')
 
-# Test PostgreSQL Supabase V2.7.0
-from brvm_v270_postgres import tester_connexion
 
+# V2.7.1 — Consultation PostgreSQL Supabase (lecture seule)
 st.divider()
-st.subheader("Connexion Supabase PostgreSQL")
+st.header("V2.7.1 — Données financières PostgreSQL")
+st.caption("Consultation persistante Supabase. Les données provisoires et bloquées ne sont jamais certifiées automatiquement.")
 
-if st.button("Tester la connexion Supabase"):
-    succes, message = tester_connexion()
+if st.button("Tester la connexion et charger les données PostgreSQL", key="v271_load"):
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+        database_url = st.secrets.get("DATABASE_URL")
+        if not database_url:
+            st.error("DATABASE_URL absent des Secrets Streamlit.")
+        else:
+            with psycopg.connect(database_url, connect_timeout=12, row_factory=dict_row) as pg_conn:
+                with pg_conn.cursor() as cur:
+                    cur.execute("SET TRANSACTION READ ONLY")
+                    cur.execute("""
+                        SELECT c.ticker, c.company_name,
+                               f.fiscal_year, f.standardized_account,
+                               f.amount, f.currency, f.quality_status,
+                               f.raw_amount
+                        FROM public.financial_facts AS f
+                        JOIN public.companies AS c ON c.company_id = f.company_id
+                        WHERE c.ticker = %s
+                        ORDER BY f.fiscal_year NULLS LAST,
+                                 f.standardized_account, f.fact_id
+                    """, (selected,))
+                    pg_rows = cur.fetchall()
+            st.session_state["v271_pg_rows"] = pg_rows
+            st.session_state["v271_pg_symbol"] = selected
+            st.success(f"Connexion PostgreSQL réussie — {len(pg_rows)} observations pour {selected}.")
+    except Exception as exc:
+        # Ne pas exposer les exceptions de connexion : elles peuvent contenir des informations sensibles.
+        st.error(f"Lecture PostgreSQL impossible ({type(exc).__name__}). Vérifier les Secrets et les colonnes du schéma.")
 
-    if succes:
-        st.success(message)
+if st.session_state.get("v271_pg_symbol") == selected and "v271_pg_rows" in st.session_state:
+    pg_df = pd.DataFrame(st.session_state["v271_pg_rows"])
+    if pg_df.empty:
+        st.info("Aucune observation PostgreSQL trouvée pour cette société.")
     else:
-        st.error(message)
+        counts = pg_df["quality_status"].value_counts()
+        a, b, c = st.columns(3)
+        a.metric("Observations", len(pg_df))
+        b.metric("Provisoires", int(counts.get("PROVISIONAL", 0)))
+        c.metric("Bloquées", int(counts.get("BLOCKED", 0)))
+        st.dataframe(pg_df, hide_index=True, use_container_width=True)
+        st.download_button("Exporter les observations PostgreSQL (CSV)",
+                           pg_df.to_csv(index=False).encode("utf-8-sig"),
+                           f"postgresql_{selected}_v271.csv", "text/csv", key="v271_export")
+        st.warning("Données non certifiées : vérifier la devise, le facteur d'échelle, les années et les montants avec les PDF officiels. Les lignes BLOCKED ne doivent pas alimenter les calculs.")
