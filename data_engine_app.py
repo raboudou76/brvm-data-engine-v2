@@ -1098,3 +1098,43 @@ else:
     else:
         st.error("Écart ou doublon détecté : ne pas exécuter la promotion sans réconciliation.")
 st.warning("Le résultat net 2025 exact mentionné dans le projet d'affectation (13 075 215 062 FCFA) n'est pas interchangeable avec la valeur arrondie de synthèse (13 075 millions FCFA). Ne pas remplacer silencieusement le montant stocké.")
+
+
+# V2.8.0 — Passerelle contrôlée vers BRVM Radar
+st.divider()
+st.header("V2.8.0 — Passerelle Data Engine → BRVM Radar")
+st.caption("Lecture PostgreSQL uniquement : données VALIDATED, exercices annuels identifiés, XOF et doublons exclus.")
+from brvm_radar_bridge_v280 import read_validated, prepare_export, compute_indicators
+if st.button("Actualiser la passerelle V2.8.0", key="v280_refresh"):
+    try:
+        url280 = st.secrets.get("DATABASE_URL")
+        if not url280:
+            st.error("DATABASE_URL absent des secrets Streamlit.")
+        else:
+            st.session_state["v280_raw"] = read_validated(url280)
+            st.success("Données validées rechargées depuis PostgreSQL.")
+    except Exception as exc:
+        st.error(f"Connexion impossible ({type(exc).__name__}). Vérifier la configuration PostgreSQL.")
+raw280 = st.session_state.get("v280_raw")
+if raw280 is None:
+    st.info("Cliquer sur Actualiser la passerelle pour lire les données VALIDATED.")
+else:
+    export280, rejected280 = prepare_export(raw280)
+    a280,b280,c280=st.columns(3)
+    a280.metric("Observations VALIDATED lues",len(raw280))
+    b280.metric("Observations éligibles",len(export280))
+    c280.metric("Observations exclues",len(rejected280))
+    if not export280.empty:
+        st.dataframe(export280,hide_index=True,use_container_width=True)
+        st.download_button("Exporter les données pour Radar (CSV)",export280.to_csv(index=False).encode("utf-8-sig"),"brvm_radar_validated_v280.csv","text/csv",key="v280_csv")
+        derived280=compute_indicators(export280)
+        st.subheader("Ratios indicatifs calculables")
+        if derived280.empty:
+            st.info("Pas assez d'exercices annuels comparables pour calculer des ratios.")
+        else:
+            st.dataframe(derived280,hide_index=True,use_container_width=True)
+            st.download_button("Exporter les ratios (CSV)",derived280.to_csv(index=False).encode("utf-8-sig"),"brvm_radar_ratios_v280.csv","text/csv",key="v280_ratios")
+    if not rejected280.empty:
+        st.warning("Certaines données VALIDATED ont été exclues : vérifier la période, le mapping ou les doublons.")
+        st.dataframe(rejected280,hide_index=True,use_container_width=True)
+    st.info("Les données SMBC 2024–2025 sont arrondies au million FCFA. Les montants ne sont pas exacts à l'unité. BPA, PER et valeur intrinsèque restent désactivés sans actions en circulation, cours et contrôles complémentaires.")
