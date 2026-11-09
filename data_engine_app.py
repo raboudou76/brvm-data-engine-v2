@@ -821,3 +821,149 @@ else:
 st.download_button("Exporter le référentiel de correction V2.7.5 (CSV)",
                    expected275.to_csv(index=False).encode("utf-8-sig"),
                    "BOAB_referentiel_anomalies_V275.csv", "text/csv", key="v275_reference_csv")
+
+
+# V2.7.6 — Extension multi-sociétés : inventaire, qualité et préparation d'import
+# Lecture seule PostgreSQL : aucun ajout ni validation automatique.
+st.divider()
+st.header("V2.7.6 — Extension multi-sociétés BRVM")
+st.caption("Inventaire PostgreSQL, couverture des données VALIDATED et préparation sécurisée des imports. Aucune écriture en base.")
+companies276 = pd.DataFrame(st.session_state.get("v272_companies", []))
+facts276 = pd.DataFrame(st.session_state.get("v272_facts", []))
+if companies276.empty:
+    st.info("Clique d'abord sur « Charger les sociétés et les données PostgreSQL » dans V2.7.2, puis reviens ici.")
+else:
+    summary276 = companies276[["ticker", "company_name"]].drop_duplicates().copy()
+    if facts276.empty:
+        summary276["Observations"] = 0
+        summary276["VALIDATED"] = 0
+        summary276["PROVISIONAL"] = 0
+        summary276["BLOCKED"] = 0
+        summary276["REJECTED"] = 0
+    else:
+        for stat276 in ("VALIDATED", "PROVISIONAL", "BLOCKED", "REJECTED"):
+            counts276 = facts276.loc[facts276["quality_status"].eq(stat276)].groupby("ticker").size()
+            summary276[stat276] = summary276["ticker"].map(counts276).fillna(0).astype(int)
+        summary276["Observations"] = summary276[["VALIDATED", "PROVISIONAL", "BLOCKED", "REJECTED"]].sum(axis=1)
+    summary276["Couverture validée (%)"] = (100 * summary276["VALIDATED"] / summary276["Observations"].replace(0, float("nan"))).round(1)
+    summary276["Couverture validée (%)"] = summary276["Couverture validée (%)"].fillna(0)
+    c1_276, c2_276, c3_276, c4_276 = st.columns(4)
+    c1_276.metric("Sociétés enregistrées", len(summary276))
+    c2_276.metric("Sociétés avec données", int((summary276["Observations"] > 0).sum()))
+    c3_276.metric("Observations validées", int(summary276["VALIDATED"].sum()))
+    c4_276.metric("Observations à revoir", int(summary276["PROVISIONAL"].sum() + summary276["BLOCKED"].sum()))
+    st.subheader("Tableau de couverture multi-sociétés")
+    st.dataframe(summary276.sort_values(["VALIDATED", "ticker"], ascending=[False, True]), hide_index=True, use_container_width=True)
+    st.download_button("Exporter la couverture BRVM (CSV)", summary276.to_csv(index=False).encode("utf-8-sig"), "brvm_couverture_V276.csv", "text/csv", key="v276_cov_export")
+    st.subheader("Sociétés à compléter")
+    missing276 = summary276[summary276["Observations"] == 0]
+    if missing276.empty:
+        st.success("Toutes les sociétés du catalogue possèdent au moins une observation.")
+    else:
+        st.dataframe(missing276[["ticker", "company_name"]], hide_index=True, use_container_width=True)
+    st.subheader("Jeu de données éligible pour BRVM Radar")
+    st.caption("Uniquement les montants annuels, déclarés, en XOF et VALIDATED. Les couples société/exercice/compte dupliqués sont écartés.")
+    if facts276.empty:
+        st.info("Aucune observation à exporter.")
+    else:
+        eligible276 = facts276.loc[
+            facts276["quality_status"].eq("VALIDATED")
+            & facts276["fiscal_year"].notna()
+            & facts276["amount"].notna()
+            & facts276["fiscal_period"].eq("ANNUEL")
+            & facts276["period_basis"].eq("REPORTED")
+            & facts276["currency"].eq("XOF")
+        ].copy()
+        if not eligible276.empty:
+            keys276 = ["ticker", "fiscal_year", "standardized_account"]
+            ambiguous276 = eligible276.duplicated(keys276, keep=False)
+            excluded276 = int(ambiguous276.sum())
+            eligible276 = eligible276.loc[~ambiguous276].copy()
+            if excluded276:
+                st.warning(f"{excluded276} lignes écartées pour doublons/ambiguïtés (société, exercice, compte).")
+        st.metric("Observations éligibles", len(eligible276))
+        if not eligible276.empty:
+            st.dataframe(eligible276[["ticker", "fiscal_year", "standardized_account", "amount", "currency", "quality_status", "source_page", "report_url"]], hide_index=True, use_container_width=True)
+            st.download_button("Exporter les données VALIDATED pour Radar (CSV)", eligible276.to_csv(index=False).encode("utf-8-sig"), "brvm_radar_validated_V276.csv", "text/csv", key="v276_radar_export")
+        else:
+            st.info("Aucune donnée ne satisfait l'ensemble des conditions de publication.")
+
+st.subheader("Préparer l'intégration d'une nouvelle société")
+st.caption("Le fichier CSV est examiné localement dans Streamlit et n'est pas inséré dans Supabase. Toute observation nouvelle reste PROVISIONAL ou BLOCKED jusqu'à revue documentaire.")
+example276 = pd.DataFrame([{
+    "ticker": "EXEMPLE", "company_name": "Société exemple", "fiscal_year": 2025,
+    "fiscal_period": "ANNUEL", "period_basis": "REPORTED", "standardized_account": "NET_INCOME",
+    "amount": "", "currency": "XOF", "source_page": "", "report_url": "",
+    "quality_status": "PROVISIONAL", "evidence": ""
+}])
+st.download_button("Télécharger le modèle d'import (CSV)", example276.to_csv(index=False).encode("utf-8-sig"), "modele_import_BRVM_V276.csv", "text/csv", key="v276_template")
+up276 = st.file_uploader("Contrôler un fichier CSV avant intégration", type=["csv"], key="v276_csv")
+if up276 is not None:
+    try:
+        import io
+        candidate276 = pd.read_csv(io.BytesIO(up276.getvalue()), dtype=str, encoding="utf-8-sig", sep=None, engine="python").fillna("")
+        required276 = list(example276.columns)
+        absent276 = [col for col in required276 if col not in candidate276.columns]
+        if absent276:
+            st.error("Colonnes manquantes : " + ", ".join(absent276))
+        elif candidate276.empty:
+            st.warning("Fichier vide.")
+        else:
+            issues276 = []
+            valid_accounts276 = {"PNB", "NET_INCOME", "OPERATING_INCOME", "EQUITY", "REVENUE"}
+            existing276 = set()
+            if not facts276.empty:
+                for r276 in facts276.itertuples(index=False):
+                    try:
+                        existing276.add((str(r276.ticker).strip().upper(), int(r276.fiscal_year), str(r276.standardized_account).strip().upper()))
+                    except (ValueError, TypeError):
+                        pass
+            seen276 = set()
+            for idx276, r276 in candidate276.iterrows():
+                problems276 = []
+                tick276 = str(r276["ticker"]).strip().upper()
+                account276 = str(r276["standardized_account"]).strip().upper()
+                try:
+                    yr276 = int(r276["fiscal_year"])
+                    if not 1990 <= yr276 <= 2100:
+                        raise ValueError()
+                except ValueError:
+                    yr276 = None
+                    problems276.append("exercice invalide")
+                try:
+                    from decimal import Decimal
+                    val276 = Decimal(str(r276["amount"]).strip())
+                    if not val276.is_finite():
+                        raise ValueError()
+                except (ValueError, ArithmeticError):
+                    problems276.append("montant absent/invalide")
+                if not tick276 or not str(r276["company_name"]).strip():
+                    problems276.append("société non renseignée")
+                if account276 not in valid_accounts276:
+                    problems276.append("compte non reconnu (mapping requis)")
+                if r276["fiscal_period"] != "ANNUEL" or r276["period_basis"] != "REPORTED":
+                    problems276.append("période/base à examiner")
+                if r276["currency"] != "XOF":
+                    problems276.append("devise/unité à examiner")
+                if not str(r276["report_url"]).startswith("https://"):
+                    problems276.append("URL source HTTPS absente")
+                if not str(r276["source_page"]).strip():
+                    problems276.append("page source absente")
+                if r276["quality_status"] not in ("PROVISIONAL", "BLOCKED"):
+                    problems276.append("statut d'import interdit : utiliser PROVISIONAL ou BLOCKED")
+                key276 = (tick276, yr276, account276)
+                if key276 in existing276:
+                    problems276.append("observation déjà présente en base (contrôle manuel)")
+                if key276 in seen276:
+                    problems276.append("doublon dans le CSV")
+                seen276.add(key276)
+                issues276.append(" ; ".join(problems276))
+            reviewed276 = candidate276.copy()
+            reviewed276.insert(0, "ligne_csv", range(2, len(reviewed276) + 2))
+            reviewed276["anomalies_import"] = issues276
+            st.metric("Lignes à corriger", sum(bool(x) for x in issues276))
+            st.dataframe(reviewed276, hide_index=True, use_container_width=True)
+            st.download_button("Exporter le rapport de précontrôle (CSV)", reviewed276.to_csv(index=False).encode("utf-8-sig"), "controle_import_V276.csv", "text/csv", key="v276_preflight")
+            st.info("Précontrôle uniquement : aucune société, aucun rapport et aucune observation n'ont été créés dans PostgreSQL.")
+    except Exception as exc:
+        st.error(f"Impossible de lire le CSV ({type(exc).__name__}). Vérifier l'encodage et le séparateur.")
